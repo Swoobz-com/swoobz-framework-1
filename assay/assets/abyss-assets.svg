@@ -1,0 +1,83 @@
+<svg viewBox="0 0 1120 300" xmlns="http://www.w3.org/2000/svg" font-family="monospace">
+  <defs>
+    <radialGradient id="glowc" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#35e0d2" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#35e0d2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f0b542" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#f0b542" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowr" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff5d5d" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ff5d5d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1120" height="300" fill="#081119" rx="16"/>
+
+  <g stroke="#040a10" stroke-width="4">
+    <circle cx="100" cy="120" r="44" fill="#0f2733" stroke="#29566d"/>
+    <circle cx="100" cy="120" r="30" fill="none" stroke="#1a3c4d" stroke-width="3"/>
+    <circle cx="100" cy="120" r="8" fill="#35e0d2" stroke="none"/>
+  </g>
+  <text x="100" y="210" text-anchor="middle" fill="#7fa0b0" font-size="13" letter-spacing="1">POD · DICHT</text>
+
+  <g>
+    <circle cx="260" cy="120" r="58" fill="url(#glowc)"/>
+    <g stroke="#040a10" stroke-width="4">
+      <circle cx="260" cy="120" r="44" fill="#0d3c38" stroke="#35e0d2"/>
+      <circle cx="260" cy="120" r="30" fill="none" stroke="#1c5a52" stroke-width="3" stroke-dasharray="6 5"/>
+    </g>
+    <text x="260" y="130" text-anchor="middle" fill="#8ff2e8" font-size="26" font-weight="bold">3</text>
+  </g>
+  <text x="260" y="210" text-anchor="middle" fill="#7fa0b0" font-size="13" letter-spacing="1">POD · OP ROUTE</text>
+
+  <g>
+    <circle cx="420" cy="120" r="58" fill="url(#glowg)"/>
+    <g stroke="#040a10" stroke-width="4" stroke-linejoin="round">
+      <circle cx="420" cy="120" r="44" fill="#1a2a35" stroke="#f0b542"/>
+      <rect x="392" y="108" width="56" height="34" rx="6" fill="#6e4526"/>
+      <path d="M 392 118 h 56" stroke="#040a10" stroke-width="3"/>
+      <rect x="412" y="112" width="14" height="10" rx="2" fill="#f0b542"/>
+      <ellipse cx="420" cy="104" rx="18" ry="7" fill="#f0b542"/>
+    </g>
+  </g>
+  <text x="420" y="210" text-anchor="middle" fill="#7fa0b0" font-size="13" letter-spacing="1">POD · GECLAIMD</text>
+
+  <g>
+    <circle cx="580" cy="120" r="62" fill="url(#glowr)"/>
+    <g stroke="#1a2a35" stroke-width="7" stroke-linecap="round">
+      <path d="M 580 76 v -14 M 580 164 v 14 M 536 120 h -14 M 624 120 h 14 M 549 89 l -10 -10 M 611 151 l 10 10 M 611 89 l 10 -10 M 549 151 l -10 10"/>
+    </g>
+    <circle cx="580" cy="120" r="34" fill="#1a2a35" stroke="#040a10" stroke-width="4"/>
+    <circle cx="580" cy="120" r="11" fill="#ff5d5d"/>
+    <path d="M 566 100 q 8 -8 18 -4" fill="none" stroke="#31485a" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="580" y="210" text-anchor="middle" fill="#7fa0b0" font-size="13" letter-spacing="1">ZEEMIJN · BUST</text>
+
+  <g stroke="#040a10" stroke-width="4" stroke-linejoin="round">
+    <ellipse cx="760" cy="115" rx="78" ry="32" fill="#14303d"/>
+    <path d="M 688 104 q -28 -6 -40 10 q 16 13 44 7 Z" fill="#0f2530"/>
+    <rect x="732" y="70" width="10" height="22" rx="5" fill="#0f2530"/>
+    <circle cx="737" cy="66" r="7" fill="#0f2530"/>
+    <circle cx="780" cy="110" r="14" fill="#0c1c26"/>
+    <circle cx="780" cy="110" r="8" fill="#35e0d2" stroke="none"/>
+    <circle cx="830" cy="122" r="9" fill="#f0b542"/>
+  </g>
+  <text x="760" y="210" text-anchor="middle" fill="#7fa0b0" font-size="13" letter-spacing="1">DE SUB · SPELER</text>
+
+  <g stroke="#040a10" stroke-width="4" stroke-linejoin="round">
+    <path d="M 950 84 q 50 -20 100 0 l -12 66 q -38 14 -76 0 Z" fill="none" stroke="#2e4a3c" stroke-width="5"/>
+    <path d="M 950 84 q 25 40 50 0 q 25 40 50 0" fill="none" stroke="#2e4a3c" stroke-width="4"/>
+    <path d="M 962 118 q 38 26 76 0" fill="none" stroke="#2e4a3c" stroke-width="4"/>
+    <ellipse cx="985" cy="128" rx="13" ry="6" fill="#f0b542"/>
+    <ellipse cx="1015" cy="134" rx="13" ry="6" fill="#d9a94f"/>
+    <ellipse cx="1000" cy="120" rx="11" ry="5" fill="#f0b542"/>
+    <circle cx="1000" cy="74" r="8" fill="#35e0d2"/>
+  </g>
+  <text x="1000" y="210" text-anchor="middle" fill="#7fa0b0" font-size="13" letter-spacing="1">HAUL-NET · MULTIPLIER</text>
+
+  <text x="560" y="262" text-anchor="middle" fill="#dcecf2" font-size="15" letter-spacing="3">ABYSS LINE · ASSET SHEET</text>
+  <text x="560" y="284" text-anchor="middle" fill="#7fa0b0" font-size="12" letter-spacing="1">cyaan = speler · amber = waarde · rood = gevaar</text>
+</svg>
