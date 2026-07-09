@@ -5,8 +5,11 @@
  *   • Boundary outcomes at exact threshold values (1.50× and 3.00×).
  *   • Determinism: same inputs read the same line on every call.
  *   • Rhythm window edges: in-window, out-of-window, no prior reveal.
- *   • Cumulative-BPS gate: chain alone doesn't surface a badge.
- *   • Tier transition: rhythm → perfect at the exact peak band.
+ *   • Cumulative-BPS floor gate: chain alone doesn't surface a badge
+ *     below the economic-stake floor.
+ *   • Tier transition: rhythm → perfect at the exact peak CHAIN length
+ *     (FIX 5, 2026-07-07 — peak tier is chain-based, not BPS-band-based,
+ *     so it is reachable in all three worlds regardless of mine density).
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -15,7 +18,7 @@ import {
   LOSS_VAULT_NARRATIVES,
   RHYTHM_MIN_CHAIN,
   RHYTHM_MIN_CUMULATIVE_BPS,
-  RHYTHM_PEAK_CUMULATIVE_BPS,
+  RHYTHM_PEAK_CHAIN,
   RHYTHM_WINDOW_MS,
   rhythmBadgeLabel,
   SOLID_VAULT_NARRATIVES,
@@ -70,8 +73,14 @@ describe('settlementNarrative', () => {
 })
 
 describe('settlementEyebrow', () => {
-  it('reads "TAKE PROFIT" on a win and "RUGGED" on a loss', () => {
-    expect(settlementEyebrow(true)).toBe('TAKE PROFIT')
+  // FIX 4 (2026-07-07, consolidated fix pass) — this test still asserted the
+  // pre-fix future-tense 'TAKE PROFIT' value; the source (see the "PAST
+  // TENSE by design" comment on `settlementEyebrow`) already ships 'TOOK
+  // PROFIT' so the settled-WIN eyebrow matches `HudSettledBanner`'s past-
+  // tense "SECURED THE BAG" on the same already-settled screen. Stale
+  // assertion updated to match the shipped, intended behavior.
+  it('reads "TOOK PROFIT" on a win and "RUGGED" on a loss', () => {
+    expect(settlementEyebrow(true)).toBe('TOOK PROFIT')
     expect(settlementEyebrow(false)).toBe('RUGGED')
   })
 })
@@ -107,26 +116,56 @@ describe('evaluateRhythmTick', () => {
     expect(tick.badge).toBeNull()
   })
 
-  it('does not surface a badge below the minimum cumulative BPS', () => {
+  // FIX 5 (2026-07-07, rhythm-tier reachability): the peak tier is now
+  // decided by CHAIN LENGTH (`RHYTHM_PEAK_CHAIN`), not a cumulative-BPS
+  // band — a value-based band could not be reached in ALL THREE worlds
+  // (bluechips / altseason / shitcoin) because mine-density makes their
+  // cumulative curves diverge wildly by the time `RHYTHM_MIN_CHAIN` first
+  // allows evaluation. `RHYTHM_MIN_CUMULATIVE_BPS` remains as a pure
+  // economic-stake FLOOR gate, decoupled from which tier is shown.
+
+  it('does not surface a badge at chain 3 below the minimum cumulative floor', () => {
     const now = 1_000
     const prev = now - 200
-    const tick = evaluateRhythmTick(prev, now, RHYTHM_MIN_CHAIN, RHYTHM_MIN_CUMULATIVE_BPS - 1n)
-    expect(tick.chain).toBe(RHYTHM_MIN_CHAIN + 1)
+    // previousChain = 2 -> new chain = 3 = RHYTHM_MIN_CHAIN.
+    const tick = evaluateRhythmTick(prev, now, RHYTHM_MIN_CHAIN - 1, RHYTHM_MIN_CUMULATIVE_BPS - 1n)
+    expect(tick.chain).toBe(RHYTHM_MIN_CHAIN)
     expect(tick.badge).toBeNull()
   })
 
-  it('surfaces the rhythm badge at the minimum cumulative band', () => {
+  it('surfaces the "rhythm" tier at chain 3 (RHYTHM_MIN_CHAIN) once past the floor', () => {
+    const now = 1_000
+    const prev = now - 200
+    const tick = evaluateRhythmTick(prev, now, RHYTHM_MIN_CHAIN - 1, RHYTHM_MIN_CUMULATIVE_BPS)
+    expect(tick.chain).toBe(RHYTHM_MIN_CHAIN)
+    expect(tick.badge).toBe('rhythm')
+  })
+
+  it('stays at the "rhythm" tier at chain 4 (below RHYTHM_PEAK_CHAIN)', () => {
     const now = 1_000
     const prev = now - 200
     const tick = evaluateRhythmTick(prev, now, RHYTHM_MIN_CHAIN, RHYTHM_MIN_CUMULATIVE_BPS)
     expect(tick.chain).toBe(RHYTHM_MIN_CHAIN + 1)
+    expect(tick.chain).toBe(RHYTHM_PEAK_CHAIN - 1)
     expect(tick.badge).toBe('rhythm')
   })
 
-  it('upgrades to the perfect badge at the peak band', () => {
+  it('upgrades to the "perfect" tier at chain 5 (RHYTHM_PEAK_CHAIN)', () => {
     const now = 1_000
     const prev = now - 200
-    const tick = evaluateRhythmTick(prev, now, RHYTHM_MIN_CHAIN, RHYTHM_PEAK_CUMULATIVE_BPS)
+    const tick = evaluateRhythmTick(prev, now, RHYTHM_PEAK_CHAIN - 1, RHYTHM_MIN_CUMULATIVE_BPS)
+    expect(tick.chain).toBe(RHYTHM_PEAK_CHAIN)
+    expect(tick.badge).toBe('perfect')
+  })
+
+  it('reachability: peak tier is chain-driven, independent of how far cumulative bps has moved', () => {
+    const now = 1_000
+    const prev = now - 200
+    // A world with a much steeper cumulative curve (e.g. SHITCOIN reveal3
+    // ~65_370 bps) still resolves the SAME tier at the SAME chain length —
+    // the tier decision has no cumulative-value dependency once the floor
+    // is cleared.
+    const tick = evaluateRhythmTick(prev, now, RHYTHM_PEAK_CHAIN - 1, 65_370n)
     expect(tick.badge).toBe('perfect')
   })
 
