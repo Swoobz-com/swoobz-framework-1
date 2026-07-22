@@ -1117,9 +1117,13 @@ export function VendingExperience(): React.ReactElement {
   useEffect(() => {
     setSelectedSlots((prev) => (prev.length > packCount ? prev.slice(0, packCount) : prev))
   }, [packCount])
-  // Selection clears once the vend settles; the frozen map resets back at ready.
+  // Selection clears the moment the vend STARTS (Tim 2026-07-22: no lingering
+  // highlights while/after the machine runs — the coil already shows where the
+  // packs come from; a new round always begins clean, so hand-picking never
+  // mixes with a previous round's marks). settled-clear kept as a safety net;
+  // the frozen slotOrder map resets back at ready.
   useEffect(() => {
-    if (phaseKind === 'settled') setSelectedSlots([])
+    if (phaseKind === 'vending' || phaseKind === 'settled') setSelectedSlots([])
     if (phaseKind === 'ready') setCommittedSlotOrder(null)
   }, [phaseKind])
   useEffect(() => {

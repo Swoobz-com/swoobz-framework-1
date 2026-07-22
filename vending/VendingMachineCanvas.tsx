@@ -1331,7 +1331,10 @@ export function VendingMachineCanvas({
         const col = slot % 5
         const cx = SLOT_XS[col]!
         const cy = SHELF_YS[shelf]! - PACK_H / 2 - 4
-        const selected = !!selectedSlots?.includes(slot)
+        // Glow only while picking is live (ready phase): once the vend runs,
+        // no cell may keep a selected mark (defense-in-depth beside the
+        // Experience's clear-on-vend — Tim: only current hand-picks ever glow).
+        const selected = slotSelectEnabled && !!selectedSlots?.includes(slot)
         const order = selectedSlots?.indexOf(slot) ?? -1
         return (
           <button
