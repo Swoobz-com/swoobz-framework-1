@@ -18,6 +18,8 @@ cover-cropped into the pouch shape per class (standard/gold), source insets
 | pack-gold-cut.png | v2 LIVE: gold flame booster with coal band + saturn-ringed hex (GOLD class); rembg cutout, alpha-trimmed to 544x943 | gen c4afd1e9-12a7-4cc9-b3bc-3d8dd85d25a8 → rembg 17b22428-10ef-461f-9c86-43dbc05b85c0 |
 | mural-storm.png (2:3) | MEDIUM machine wrap: indigo storm waves + silver lightning + hero capsules (slate shell) | 6ceff328-a448-4ddf-988d-5edb68c6ac6f |
 | mural-obsidian.png (2:3) | HARD machine wrap: obsidian shards + molten gold veins + hero capsules (near-black shell) | 3fd6dbf3-8722-42a3-ba2e-b87a867b3099 |
+| pack-storm-cut.png | PER-MACHINE pack skins (Tim 2026-07-22): MEDIUM standard booster, storm clouds + lightning doodle, same silhouette + gold hex band (ref = pack-standard gen); rembg, alpha-trimmed 1245x2206 | gen 9158d2d6-880c-4fba-ba09-f71de0e73334 → rembg 12242025-3541-48a2-967d-e0cef78bf13f |
+| pack-obsidian-cut.png | HARD standard booster, volcanic obsidian shards + warm glow doodle, same silhouette + gold hex band (ref = pack-standard gen); rembg, alpha-trimmed 1253x2203. GOLD pack stays SHARED (class marker, RG) | gen 771e0884-9d57-45e6-9576-8c4fa56f7729 → rembg 58239178-eb59-4ff8-b407-849ed004a6f8 |
 
 Panel art (2026-07-16 late night — Tim: panels als art die samenkomt met de machine):
 | panel-easy.png | UI panel underlay: charcoal + teal wave linework at edges, calm dark center | 7206be6e-85e2-4c93-a9df-8c30cd64d504 |

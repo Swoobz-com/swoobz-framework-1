@@ -785,8 +785,22 @@ export function VendingMachineCanvas({
       }
       return b
     }
-    const packStdImg = new Image()
-    packStdImg.src = '/skin/pack-standard-cut.png'
+    // Per-machine STANDARD pack skins (Tim 2026-07-22): EASY keeps the wave
+    // pack, STORM gets storm clouds + lightning, OBSIDIAN gets volcanic glass.
+    // The GOLD pack stays SHARED across machines on purpose: gold is the
+    // outcome-CLASS marker and must read identically everywhere (RG class
+    // language). Provenance: used-assets/skin/MANIFEST.md.
+    const PACK_STD_SRC: Record<VendingTierId, string> = {
+      easy: '/skin/pack-standard-cut.png',
+      medium: '/skin/pack-storm-cut.png',
+      hard: '/skin/pack-obsidian-cut.png',
+    }
+    const packStdImgs = new Map<VendingTierId, HTMLImageElement>()
+    for (const t of ['easy', 'medium', 'hard'] as const) {
+      const img = new Image()
+      img.src = PACK_STD_SRC[t]
+      packStdImgs.set(t, img)
+    }
     const packGoldImg = new Image()
     packGoldImg.src = '/skin/pack-gold-cut.png'
     let logoReady = false
@@ -972,7 +986,7 @@ export function VendingMachineCanvas({
         if (dropped.has(slot)) continue
         const inPurchase = queued.has(slot)
         const active = phase === 'ready' ? inPurchase : phase === 'vending' && inPurchase
-        drawPack(g, cx, cy, 'standard', 1, 1, 0, active ? 1 : 0.4, 0, readySprite(packStdImg))
+        drawPack(g, cx, cy, 'standard', 1, 1, 0, active ? 1 : 0.4, 0, readySprite(packStdImgs.get(tierNow)!))
       }
       // Shelf strips + coils (drawn OVER packs: packs sit behind the coil).
       for (const sy of SHELF_YS) {
@@ -1165,7 +1179,7 @@ export function VendingMachineCanvas({
         // for a 5× and a 100× gold (RG-C5).
         const glow = d.cls === 'gold' ? 0.85 : 0
 
-        const dropSprite = readySprite(d.cls === 'gold' ? packGoldImg : packStdImg)
+        const dropSprite = readySprite(d.cls === 'gold' ? packGoldImg : packStdImgs.get(tierNow)!)
         // Clip helpers: the pack only ever renders INSIDE the machine — the
         // glass chamber while falling, the lit bay while landing (ref video).
         const clipGlass = (): void => {
