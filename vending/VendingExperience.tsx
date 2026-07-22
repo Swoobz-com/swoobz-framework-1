@@ -1423,7 +1423,14 @@ export function VendingExperience(): React.ReactElement {
                     reducedMotion={reduced}
                     tier={t}
                     backdrop={!isActive}
-                    slotOrder={isActive ? committedSlotOrder ?? undefined : undefined}
+                    // Live in ready (so the canvas' bright queued-pack set
+                    // tracks hand-picks while choosing), frozen at vend.
+                    slotOrder={
+                      isActive
+                        ? committedSlotOrder ??
+                          (phaseKind === 'ready' ? computeSlotOrder(selectedSlots, packCount) : undefined)
+                        : undefined
+                    }
                     selectedSlots={isActive ? selectedSlots : undefined}
                     onToggleSlot={isActive ? toggleSlot : undefined}
                     slotSelectEnabled={isActive && phaseKind === 'ready'}

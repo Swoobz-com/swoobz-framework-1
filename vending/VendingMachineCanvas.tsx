@@ -953,16 +953,24 @@ export function VendingMachineCanvas({
       // Which slots still hold their pack? A slot empties the moment its drop
       // starts and STAYS empty for the round (the sprite takes over drawing).
       const dropped = emptiedRef.current
-      // Queued-this-purchase = live slots [0..count). While READY the full
-      // selection shows bright; other live slots + the two STOCK shelves
-      // (slots ≥ LIVE_SLOTS, never vended) show dimmed inventory packs.
+      // Queued-this-purchase follows the slotOrder map (hand-picks first, then
+      // auto-fill) so the BRIGHT packs are exactly the ones THIS purchase will
+      // vend — picking C1 visibly steals a spot from the auto set (Tim
+      // 2026-07-22: the old fixed [0..count) read as a stuck auto-selection
+      // next to fresh hand-picks). No slotOrder → [0..count), same as ever.
+      const orderNow = slotOrderRef.current
+      const queued = new Set<number>()
+      for (let i = 0; i < Math.min(count, LIVE_SLOTS); i++) {
+        const s = orderNow?.[i]
+        queued.add(s != null ? s % TOTAL_SLOTS : i)
+      }
       for (let slot = 0; slot < TOTAL_SLOTS; slot++) {
         const shelf = Math.floor(slot / 5)
         const col = slot % 5
         const cx = SLOT_XS[col]!
         const cy = SHELF_YS[shelf]! - PACK_H / 2 - 4
         if (dropped.has(slot)) continue
-        const inPurchase = slot < Math.min(count, LIVE_SLOTS)
+        const inPurchase = queued.has(slot)
         const active = phase === 'ready' ? inPurchase : phase === 'vending' && inPurchase
         drawPack(g, cx, cy, 'standard', 1, 1, 0, active ? 1 : 0.4, 0, readySprite(packStdImg))
       }
