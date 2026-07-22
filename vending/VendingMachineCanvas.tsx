@@ -56,7 +56,12 @@ const SLOT_CELL_W = 68
 const SLOT_CELL_H = 92
 /** On-select bloom duration (RG-C5 module const — identical for every slot,
  *  tier value, price and streak; keyed only to the select gesture). */
-const SLOT_BLOOM_MS = 460
+const SLOT_BLOOM_MS = 240
+/** Ambient breathe period for the steady selected glow. All selected cells run
+ *  on ONE shared phase clock (negative animation-delay from a common epoch —
+ *  animation-counting law: no unsynced oscillators). Opacity-only (composited,
+ *  cheap); reduced-motion shows the static glow instead. */
+const SLOT_BREATHE_MS = 2600
 const SHELF_LETTERS = ['A', 'B', 'C', 'D'] as const
 /** Slot index (0..19, shelf-major) → punch-code tag (A1..D5). */
 function slotCode(slot: number): string {
@@ -1308,8 +1313,15 @@ export function VendingMachineCanvas({
           100% { opacity: 0;    transform: scale(1); }
         }
         .vend-slot-bloom { animation: vendSlotBloom ${SLOT_BLOOM_MS}ms ease-out both; }
+        @keyframes vendSlotBreathe {
+          0%   { opacity: 0.55; }
+          50%  { opacity: 1; }
+          100% { opacity: 0.55; }
+        }
+        .vend-slot-glow { animation: vendSlotBreathe ${SLOT_BREATHE_MS}ms ease-in-out infinite; }
         @media (prefers-reduced-motion: reduce) {
           .vend-slot-bloom { animation: none; opacity: 0; }
+          .vend-slot-glow { animation: none; opacity: 0.85; }
         }
         .vend-slot-cell:hover:not(:disabled) .vend-slot-tag,
         .vend-slot-cell:focus-visible .vend-slot-tag { color: #e8ecf1; }
@@ -1341,13 +1353,29 @@ export function VendingMachineCanvas({
               border: `1px solid ${selected ? ledColor : 'rgba(255,255,255,0.10)'}`,
               borderRadius: 9,
               background: selected ? `${ledColor}1f` : 'transparent',
-              boxShadow: selected ? `0 0 14px 1px ${ledColor}, inset 0 0 10px ${ledColor}55` : 'none',
               cursor: slotSelectEnabled ? 'pointer' : 'default',
               pointerEvents: slotSelectEnabled ? 'auto' : 'none',
               touchAction: 'manipulation',
-              transition: 'box-shadow 200ms ease, border-color 200ms ease, background 200ms ease',
+              transition: 'border-color 110ms ease, background 110ms ease',
             }}
           >
+            {/* Ambient steady glow: the box-shadow lives on this span so only its
+                OPACITY animates (composited breathe on the shared phase clock —
+                the negative delay pins every cell to one global epoch). */}
+            {selected && (
+              <span
+                aria-hidden
+                className="vend-slot-glow"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  borderRadius: 9,
+                  boxShadow: `0 0 14px 1px ${ledColor}, inset 0 0 10px ${ledColor}55`,
+                  pointerEvents: 'none',
+                  animationDelay: `-${Date.now() % SLOT_BREATHE_MS}ms`,
+                }}
+              />
+            )}
             {/* One-shot bloom ring — flashes on select, then fades to 0; the
                 steady glow lives on the button box-shadow above. Gated under
                 reduced-motion (steady glow stays). */}

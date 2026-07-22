@@ -1423,7 +1423,9 @@ export function VendingExperience(): React.ReactElement {
                     selectedSlots={isActive ? selectedSlots : undefined}
                     onToggleSlot={isActive ? toggleSlot : undefined}
                     slotSelectEnabled={isActive && phaseKind === 'ready'}
-                    ledColor={TIER_ROOMS[t].led}
+                    // Swoobz accent (Tim): selection glow is the brand cyan on
+                    // every machine, not the per-tier LED color.
+                    ledColor={T.cyan}
                   />
                 </div>
               )
