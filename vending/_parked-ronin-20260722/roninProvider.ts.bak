@@ -1,0 +1,448 @@
+/**
+ * AUTOMAT — RONIN ZERO machine provider (deterministic state machine).
+ *
+ * Mirrors vendingProvider's structure (seed-committed derivation, staggered
+ * vend driver at VEND_STEP_MS, RG-C3 no-look-ahead dispensing) but the
+ * mechanic is COSMETIC: packs cost demo balance (debited through the money
+ * controller so there is ONE balance) and pay fighter cards, never money.
+ *
+ * Derivation (Glass Box, re-run by the receipt):
+ *   rarityRoll = SHA-256(seed ‖ "RONINPACK:<priceId>" ‖ u64(i) ‖ u64(attempt))
+ *                [first 8 bytes LE, rejection-sampled] mod 100000 → rarity
+ *   charRoll   = SHA-256(seed ‖ "RONINCHAR:<priceId>" ‖ u64(i) ‖ u64(attempt))
+ *                [rejection-sampled] mod poolSize(rarity) → fighter
+ *
+ * PREVIEW path (Tim: demo buttons per tier): a settled outcome flagged
+ * `preview` — nothing debited, nothing enlisted, presentation identical to a
+ * real pull of that tier. Preview outcomes carry no seed (they are labeled,
+ * not verified).
+ *
+ * RG-C5: vend cadence + cues are class-keyed module consts; the mythical/
+ * legendary cue is the gold cue (outcome CLASS, never value).
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ensureAudio, playGoldPack, playTrayServed, playVendPack } from './vendingAudio'
+import { MAX_PACKS, MIN_PACKS, WEIGHT_TOTAL } from './vendingMath'
+import { VEND_STEP_MS } from './vendingProvider'
+import {
+  charAt,
+  RARITY_RANK,
+  RONIN_PRICES,
+  RONIN_ROSTER,
+  rollToRarity,
+  rosterByRarity,
+} from './roninPacks'
+import type { RoninFighter, RoninRarity } from './roninPacks'
+
+const SETTLE_HOLD_MS = 1_000
+const INSTANT_HOLD_MS = 700
+/** localStorage key for the enlisted-fighter collection (the barracks). */
+export const BARRACKS_KEY = 'rz_barracks'
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+export interface RoninPackResult {
+  packIndex: number
+  /** Rarity roll ∈ [0, 100000) — the receipt re-derives roll → rarity. */
+  roll: bigint
+  /** Character index within the rarity pool (uniform, rejection-sampled). */
+  charIndex: number
+  rarity: RoninRarity
+  fighter: RoninFighter
+}
+
+export interface RoninOutcome {
+  priceId: string
+  priceLamports: bigint
+  packCount: number
+  totalCostLamports: bigint
+  packs: RoninPackResult[]
+  /** Highest rarity in the pull — keys the opening scene color. */
+  bestRarity: RoninRarity
+  preview: boolean
+  serverSeedHex: string
+  serverSeedHashHex: string
+}
+
+export type RoninPhase =
+  | { kind: 'ready' }
+  | { kind: 'vending' }
+  | { kind: 'settled'; outcome: RoninOutcome }
+
+export interface RoninState {
+  phase: RoninPhase
+  priceIndex: number
+  packCount: number
+  committedSeedHashHex: string | null
+  dispensed: RoninPackResult[]
+  revealPace: 'staggered' | 'instant'
+}
+
+interface RoninSecrets {
+  serverSeed: Uint8Array
+  serverSeedHash: Uint8Array
+  priceId: string
+  priceLamports: bigint
+  packs: RoninPackResult[]
+}
+
+// ─── Derivation (public — the receipt re-runs these) ────────────────────────
+
+function toHex(bytes: Uint8Array): string {
+  let hex = ''
+  for (let i = 0; i < bytes.length; i++) hex += bytes[i]!.toString(16).padStart(2, '0')
+  return hex
+}
+
+async function sha256(parts: Uint8Array[]): Promise<Uint8Array> {
+  const total = parts.reduce((n, p) => n + p.length, 0)
+  const buf = new Uint8Array(total)
+  let off = 0
+  for (const p of parts) {
+    buf.set(p, off)
+    off += p.length
+  }
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', buf))
+}
+
+function u64Le(v: bigint): Uint8Array {
+  const out = new Uint8Array(8)
+  let x = v
+  for (let i = 0; i < 8; i++) {
+    out[i] = Number(x & 0xffn)
+    x >>= 8n
+  }
+  return out
+}
+
+const U64_SPAN = 1n << 64n
+
+async function deriveUniform(
+  serverSeed: Uint8Array,
+  tag: string,
+  index: number,
+  modulus: bigint,
+): Promise<bigint> {
+  const tagBytes = new TextEncoder().encode(tag)
+  const acceptLimit = U64_SPAN - (U64_SPAN % modulus)
+  for (let attempt = 0n; ; attempt++) {
+    const hash = await sha256([serverSeed, tagBytes, u64Le(BigInt(index)), u64Le(attempt)])
+    let raw = 0n
+    for (let i = 0; i < 8; i++) raw |= BigInt(hash[i]!) << BigInt(8 * i)
+    if (raw < acceptLimit) return raw % modulus
+  }
+}
+
+/** Pack i's rarity roll (uniform over WEIGHT_TOTAL, domain-separated). */
+export async function deriveRoninRarityRoll(
+  serverSeed: Uint8Array,
+  packIndex: number,
+  priceId: string,
+): Promise<bigint> {
+  return deriveUniform(serverSeed, `RONINPACK:${priceId}`, packIndex, WEIGHT_TOTAL)
+}
+
+/** Pack i's character index (uniform over the rarity pool size). */
+export async function deriveRoninCharIndex(
+  serverSeed: Uint8Array,
+  packIndex: number,
+  priceId: string,
+  poolSize: number,
+): Promise<number> {
+  const idx = await deriveUniform(serverSeed, `RONINCHAR:${priceId}`, packIndex, BigInt(poolSize))
+  return Number(idx)
+}
+
+async function generateSecrets(
+  priceIndex: number,
+  packCount: number,
+): Promise<RoninSecrets> {
+  const price = RONIN_PRICES[priceIndex]!
+  const serverSeed = crypto.getRandomValues(new Uint8Array(32))
+  const serverSeedHash = await sha256([serverSeed])
+  const packs: RoninPackResult[] = []
+  for (let i = 0; i < packCount; i++) {
+    const roll = await deriveRoninRarityRoll(serverSeed, i, price.id)
+    const rarity = rollToRarity(roll, price.id)
+    const pool = rosterByRarity(rarity)
+    const charIndex = await deriveRoninCharIndex(serverSeed, i, price.id, pool.length)
+    packs.push({ packIndex: i, roll, charIndex, rarity, fighter: charAt(rarity, charIndex) })
+  }
+  return { serverSeed, serverSeedHash, priceId: price.id, priceLamports: price.lamports, packs }
+}
+
+function bestOf(packs: readonly RoninPackResult[]): RoninRarity {
+  let best: RoninRarity = 'common'
+  for (const p of packs) if (RARITY_RANK[p.rarity] > RARITY_RANK[best]) best = p.rarity
+  return best
+}
+
+// ─── Barracks (localStorage, shared with the standalone Armory demo) ────────
+
+export interface BarracksEntry {
+  name: string
+  tier: RoninRarity
+  art: string | null
+  count: number
+}
+
+export function loadBarracks(): Record<string, BarracksEntry> {
+  try {
+    const raw = localStorage.getItem(BARRACKS_KEY)
+    const parsed = raw ? (JSON.parse(raw) as Record<string, BarracksEntry>) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+export function enlistToBarracks(packs: readonly RoninPackResult[]): Record<string, BarracksEntry> {
+  const coll = loadBarracks()
+  for (const p of packs) {
+    const cur = coll[p.fighter.id]
+    if (cur) cur.count += 1
+    else coll[p.fighter.id] = { name: p.fighter.name, tier: p.rarity, art: p.fighter.art, count: 1 }
+  }
+  try {
+    localStorage.setItem(BARRACKS_KEY, JSON.stringify(coll))
+  } catch {
+    /* storage full/blocked: the session collection still shows */
+  }
+  return coll
+}
+
+export function barracksTotal(coll: Record<string, BarracksEntry>): number {
+  let n = 0
+  for (const k of Object.keys(coll)) n += coll[k]!.count
+  return n
+}
+
+// ─── Controller ─────────────────────────────────────────────────────────────
+
+export interface RoninController {
+  state: RoninState
+  readonly canVend: boolean
+  readonly totalCostLamports: bigint
+  setPriceIndex: (i: number) => void
+  setPackCount: (count: number) => void
+  vendPacks: () => Promise<void>
+  skipReveal: () => void
+  /** Preview a tier's opening scene: demo cards, nothing debited/enlisted. */
+  openPreview: (rarity: RoninRarity) => void
+  /** Settled → ready. Enlists the pull to the barracks (previews enlist nothing). */
+  collect: () => void
+}
+
+function makeInitialState(): RoninState {
+  return {
+    phase: { kind: 'ready' },
+    priceIndex: 0,
+    packCount: 3,
+    committedSeedHashHex: null,
+    dispensed: [],
+    revealPace: 'staggered',
+  }
+}
+
+/**
+ * @param balanceLamports the SHARED demo balance (owned by the money controller)
+ * @param debit deduct cost from that balance; returns false if unaffordable
+ */
+export function useRoninController(
+  balanceLamports: bigint,
+  debit: (cost: bigint) => boolean,
+): RoninController {
+  const [state, setState] = useState<RoninState>(makeInitialState)
+  const secretsRef = useRef<RoninSecrets | null>(null)
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  const setPriceIndex = useCallback((i: number) => {
+    setState((s) =>
+      s.phase.kind !== 'vending' && i >= 0 && i < RONIN_PRICES.length && i !== s.priceIndex
+        ? { ...s, priceIndex: i }
+        : s,
+    )
+  }, [])
+
+  const setPackCount = useCallback((count: number) => {
+    setState((s) => {
+      if (s.phase.kind === 'vending' || !Number.isInteger(count)) return s
+      const next = Math.min(MAX_PACKS, Math.max(MIN_PACKS, count))
+      return next === s.packCount ? s : { ...s, packCount: next }
+    })
+  }, [])
+
+  const settle = useCallback(() => {
+    const secrets = secretsRef.current
+    if (!secrets) return
+    const s = stateRef.current
+    if (s.phase.kind !== 'vending') return
+    const outcome: RoninOutcome = {
+      priceId: secrets.priceId,
+      priceLamports: secrets.priceLamports,
+      packCount: secrets.packs.length,
+      totalCostLamports: secrets.priceLamports * BigInt(secrets.packs.length),
+      packs: secrets.packs.map((p) => ({ ...p })),
+      bestRarity: bestOf(secrets.packs),
+      preview: false,
+      serverSeedHex: toHex(secrets.serverSeed),
+      serverSeedHashHex: toHex(secrets.serverSeedHash),
+    }
+    playTrayServed()
+    setState((cur) =>
+      cur.phase.kind === 'vending' ? { ...cur, phase: { kind: 'settled', outcome } } : cur,
+    )
+  }, [])
+
+  const vendPacks = useCallback(async () => {
+    const s = stateRef.current
+    if (s.phase.kind !== 'ready') return
+    if (s.packCount < MIN_PACKS || s.packCount > MAX_PACKS) return
+    const price = RONIN_PRICES[s.priceIndex]!
+    const cost = price.lamports * BigInt(s.packCount)
+    if (cost <= 0n || cost > balanceLamports) return
+    if (!debit(cost)) return
+    ensureAudio()
+    const secrets = await generateSecrets(s.priceIndex, s.packCount)
+    secretsRef.current = secrets
+    setState((cur) => ({
+      ...cur,
+      phase: { kind: 'vending' },
+      committedSeedHashHex: toHex(secrets.serverSeedHash),
+      dispensed: [],
+    }))
+  }, [balanceLamports, debit])
+
+  const skipReveal = useCallback(() => {
+    const secrets = secretsRef.current
+    const s = stateRef.current
+    if (!secrets || s.phase.kind !== 'vending') return
+    if (s.dispensed.length >= secrets.packs.length) return
+    if (secrets.packs.some((p) => RARITY_RANK[p.rarity] >= RARITY_RANK.legendary)) playGoldPack()
+    else playVendPack()
+    setState((cur) =>
+      cur.phase.kind === 'vending'
+        ? { ...cur, dispensed: secrets.packs.map((p) => ({ ...p })) }
+        : cur,
+    )
+    setTimeout(() => settle(), INSTANT_HOLD_MS)
+  }, [settle])
+
+  // Preview: presentation-only demo pull of the asked tier. The headline card
+  // IS the asked rarity; side cards come from lower tiers. Math.random is fine
+  // here — nothing is owed, paid or kept, and the outcome says PREVIEW.
+  const openPreview = useCallback((rarity: RoninRarity) => {
+    const s = stateRef.current
+    if (s.phase.kind === 'vending') return
+    const used = new Set<string>()
+    const pick = (pool: readonly RoninFighter[]): RoninFighter | null => {
+      const cand = pool.filter((f) => !used.has(f.id))
+      if (cand.length === 0) return null
+      return cand[Math.floor(Math.random() * cand.length)]!
+    }
+    const packs: RoninPackResult[] = []
+    const lowerRank = Math.max(0, RARITY_RANK[rarity] - 1)
+    for (let i = 0; i < 2; i++) {
+      const tiers = Object.keys(RARITY_RANK).filter(
+        (t) => RARITY_RANK[t as RoninRarity] <= lowerRank,
+      ) as RoninRarity[]
+      const t = tiers[Math.floor(Math.random() * tiers.length)] ?? 'common'
+      const f = pick(rosterByRarity(t)) ?? pick(RONIN_ROSTER)
+      if (f) {
+        used.add(f.id)
+        packs.push({ packIndex: i, roll: 0n, charIndex: 0, rarity: f.rarity, fighter: f })
+      }
+    }
+    const head = pick(rosterByRarity(rarity))
+    if (head) {
+      used.add(head.id)
+      packs.push({ packIndex: packs.length, roll: 0n, charIndex: 0, rarity, fighter: head })
+    }
+    packs.sort((a, b) => RARITY_RANK[a.rarity] - RARITY_RANK[b.rarity])
+    packs.forEach((p, i) => {
+      p.packIndex = i
+    })
+    const price = RONIN_PRICES[s.priceIndex]!
+    const outcome: RoninOutcome = {
+      priceId: price.id,
+      priceLamports: 0n,
+      packCount: packs.length,
+      totalCostLamports: 0n,
+      packs,
+      bestRarity: bestOf(packs),
+      preview: true,
+      serverSeedHex: '',
+      serverSeedHashHex: '',
+    }
+    setState((cur) =>
+      cur.phase.kind !== 'vending' ? { ...cur, phase: { kind: 'settled', outcome } } : cur,
+    )
+  }, [])
+
+  const collect = useCallback(() => {
+    const s = stateRef.current
+    if (s.phase.kind !== 'settled') return
+    if (!s.phase.outcome.preview) enlistToBarracks(s.phase.outcome.packs)
+    secretsRef.current = null
+    setState((cur) =>
+      cur.phase.kind === 'settled' ? { ...cur, phase: { kind: 'ready' }, dispensed: [] } : cur,
+    )
+  }, [])
+
+  // Vend driver: identical cadence to the money machines (VEND_STEP_MS).
+  useEffect(() => {
+    if (state.phase.kind !== 'vending') return
+    const secrets = secretsRef.current
+    if (!secrets) return
+    const id = setInterval(() => {
+      const s = stateRef.current
+      if (s.phase.kind !== 'vending') {
+        clearInterval(id)
+        return
+      }
+      const idx = s.dispensed.length
+      if (idx >= secrets.packs.length) {
+        clearInterval(id)
+        return
+      }
+      const pack = secrets.packs[idx]!
+      if (RARITY_RANK[pack.rarity] >= RARITY_RANK.legendary) playGoldPack()
+      else playVendPack()
+      setState((cur) =>
+        cur.phase.kind === 'vending' ? { ...cur, dispensed: [...cur.dispensed, { ...pack }] } : cur,
+      )
+      if (idx + 1 >= secrets.packs.length) {
+        clearInterval(id)
+        setTimeout(() => settle(), SETTLE_HOLD_MS)
+      }
+    }, VEND_STEP_MS)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.phase.kind, settle])
+
+  const price = RONIN_PRICES[state.priceIndex]!
+  const totalCostLamports = price.lamports * BigInt(state.packCount)
+  const canVend =
+    state.phase.kind === 'ready' &&
+    state.packCount >= MIN_PACKS &&
+    state.packCount <= MAX_PACKS &&
+    totalCostLamports <= balanceLamports
+
+  return useMemo<RoninController>(
+    () => ({
+      state,
+      canVend,
+      totalCostLamports,
+      setPriceIndex,
+      setPackCount,
+      vendPacks,
+      skipReveal,
+      openPreview,
+      collect,
+    }),
+    [state, canVend, totalCostLamports, setPriceIndex, setPackCount, vendPacks, skipReveal, openPreview, collect],
+  )
+}
