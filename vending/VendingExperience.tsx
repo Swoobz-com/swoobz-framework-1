@@ -42,6 +42,10 @@ const T = {
   cardEdge: 'rgba(122, 134, 152, 0.22)',
   text: '#e8ecf1',
   dim: '#9aa3b2',
+  // WCAG-safe dim: small always-on labels over the dark rail backplates. T.dim
+  // measures 4.38-4.63:1 there (straddles AA 4.5) and T.faint fails outright —
+  // use dimLift for any <=13px label that must stay readable (a11y QA 2026-07-22).
+  dimLift: '#b7c1d0',
   faint: '#5c6675',
   cyan: '#00F0FF',
   cyanDim: 'rgba(0, 240, 255, 0.14)',
@@ -1117,6 +1121,23 @@ export function VendingExperience(): React.ReactElement {
   useEffect(() => {
     setSelectedSlots((prev) => (prev.length > packCount ? prev.slice(0, packCount) : prev))
   }, [packCount])
+  // COMPACT LANDSCAPE (the 4c fold: stage track ~210px): the percent-sized
+  // hit-cells shrink to ~27x37px there — physically no room for 5x 44px
+  // columns inside the compacted machine. Slot-picking is an OPTIONAL
+  // enhancement, so on compact landscape it is NOT OFFERED (overlay + hint
+  // hidden, selection cleared); portrait + desktop keep the full feature.
+  // (mobile-touch QA CRITICAL, 2026-07-22)
+  const [compactLandscape, setCompactLandscape] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 940px) and (orientation: landscape)')
+    const apply = (): void => setCompactLandscape(mq.matches)
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+  }, [])
+  useEffect(() => {
+    if (compactLandscape) setSelectedSlots([])
+  }, [compactLandscape])
   // Selection clears the moment the vend STARTS (Tim 2026-07-22: no lingering
   // highlights while/after the machine runs — the coil already shows where the
   // packs come from; a new round always begins clean, so hand-picking never
@@ -1385,11 +1406,15 @@ export function VendingExperience(): React.ReactElement {
         {/* ── Machine column: the TURNTABLE — all three machines mounted on a
             rotating plateau; the back two stay visible, dimmed. ── */}
         <div style={{ position: 'relative', zIndex: 1 }} className="vend-stage" ref={stageRef}>
-          {/* Plateau disc (the machines stand on it; far edge reads higher). */}
+          {/* Plateau disc (the machines stand on it; far edge reads higher).
+              pointer-events none: decorative aria-hidden art must NEVER
+              intercept clicks — it painted over the CLEAR chip on desktop
+              and made it a dead button (flow-QA CRITICAL, 2026-07-22). */}
           <div
             aria-hidden
             style={{
               position: 'absolute',
+              pointerEvents: 'none',
               left: '-14%',
               right: '-14%',
               bottom: 26,
@@ -1431,9 +1456,9 @@ export function VendingExperience(): React.ReactElement {
                           (phaseKind === 'ready' ? computeSlotOrder(selectedSlots, packCount) : undefined)
                         : undefined
                     }
-                    selectedSlots={isActive ? selectedSlots : undefined}
-                    onToggleSlot={isActive ? toggleSlot : undefined}
-                    slotSelectEnabled={isActive && phaseKind === 'ready'}
+                    selectedSlots={isActive && !compactLandscape ? selectedSlots : undefined}
+                    onToggleSlot={isActive && !compactLandscape ? toggleSlot : undefined}
+                    slotSelectEnabled={isActive && !compactLandscape && phaseKind === 'ready'}
                     // Swoobz accent (Tim): selection glow is the brand cyan on
                     // every machine, not the per-tier LED color.
                     ledColor={T.cyan}
@@ -1516,7 +1541,7 @@ export function VendingExperience(): React.ReactElement {
             {/* Slot-pick hint (ready only): calm, optional, no urgency. Lives in
                 the otherwise-empty rail so it never disturbs the tuned mobile
                 folds. */}
-            {phaseKind === 'ready' && (
+            {phaseKind === 'ready' && !compactLandscape && (
               <div
                 style={{
                   display: 'flex',
@@ -1527,11 +1552,11 @@ export function VendingExperience(): React.ReactElement {
                   fontFamily: T.mono,
                   fontSize: 12,
                   letterSpacing: '0.06em',
-                  color: T.dim,
+                  color: T.dimLift,
                 }}
               >
                 <span>PICK YOUR SLOTS · OPTIONAL</span>
-                <span style={{ color: selectedSlots.length > 0 ? T.cyan : T.faint, fontWeight: 700 }}>
+                <span style={{ color: selectedSlots.length > 0 ? T.cyan : T.dimLift, fontWeight: 700 }}>
                   {selectedSlots.length} SELECTED
                 </span>
                 {selectedSlots.length > 0 && (
@@ -1544,7 +1569,7 @@ export function VendingExperience(): React.ReactElement {
                       fontSize: 11,
                       fontWeight: 600,
                       letterSpacing: '0.06em',
-                      color: T.dim,
+                      color: T.dimLift,
                       background: 'transparent',
                       border: `1px solid ${T.cardEdge}`,
                       borderRadius: 7,

@@ -41,7 +41,14 @@ REJECTED (brand-preview-only value, nowhere in shipped Originals).
 ★ Cyan job map, all instances BY NAME (taste #5) — the LIVED jobmap as shipped
 (updated 2026-07-22): (1) canvas neon wordmark/marquee tube+underline, (2) glass
 interior top-light, (3) selected chip border+tint — the SmallBtn active state:
-machine picker, price/quantity presets AND the CUTSCENE·ON toggle, (4) VEND CTA
+machine picker, price/quantity presets AND the CUTSCENE·ON toggle; since
+2026-07-22 ALSO the slot-pick cells (A1..D5 border+tint+breathing glow, up to
+20 instances on one shared phase clock) plus their two small cyan TEXTS — the
+selected cell's code tag (10px) and the hint row's "N SELECTED" counter (12px):
+same "currently selected" semantic, so a reused job 3, not a new job. Those
+small texts stay volt #00F0FF deliberately (the DS brand-theme #00B00E
+small-text rule is REJECTED for AUTOMAT, see above; WCAG measured 8-10:1),
+(4) VEND CTA
 border+dim fill (+ VENDING… label). Anything else cyan → demote to neutral.
 Rule: cyan never surface-contacts gold or porcelain.
 NOTE: the earlier-specced "pack-count stepper numeral" job was NEVER built (the
