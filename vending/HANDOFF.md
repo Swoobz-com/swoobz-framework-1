@@ -219,7 +219,9 @@ with real mouse/touch. AGENTVENDING.md added (agent law card). THEN
 per-machine pack skins (Tim): storm + obsidian standard boosters generated
 on-model (4cr, job ids in skin MANIFEST), GOLD pack stays shared (class
 marker); PACK_STD_SRC per-tier map in the canvas; live-verified all four
-sprites load + per-tier packs visible + obsidian drop on HARD.
+sprites load + per-tier packs visible + obsidian drop on HARD. Rip cutscene
+follows the machine too (RIP_PACK_SRC map + tier prop on PackRipCutscene;
+Tim caught the old wave pack tearing on MEDIUM — verified storm pack rips).
 
 Two NEW learnings (18, 19):
 18. **Percent-overlay over a responsively-compacted canvas = invisible

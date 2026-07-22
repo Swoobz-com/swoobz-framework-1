@@ -438,11 +438,22 @@ const RIP_FLIP_STAGGER_MS = 85
 /** ONE ceremonial rip for the whole buy: the booster floats up, the lip tears
  *  off, and ALL cards fan out of the pack into a grid, then flip face-up in a
  *  cascading wave — gold cards fire their ray-burst on THEIR flip beat. */
+// Per-machine standard-pack sprite for the rip ceremony (Tim 2026-07-22:
+// the cutscene must tear the SAME pack the machine vends). Mirrors the
+// canvas' PACK_STD_SRC map; gold stays shared (outcome-class marker, RG).
+const RIP_PACK_SRC: Record<VendingTierId, string> = {
+  easy: '/skin/pack-standard-cut.png',
+  medium: '/skin/pack-storm-cut.png',
+  hard: '/skin/pack-obsidian-cut.png',
+}
+
 function PackRipCutscene({
   outcome,
+  tier,
   onFinish,
 }: {
   outcome: VendingOutcome
+  tier: VendingTierId
   onFinish: () => void
 }): React.ReactElement {
   const [stage, setStage] = useState<'enter' | 'torn' | 'spread' | 'flip' | 'done'>('enter')
@@ -457,7 +468,7 @@ function PackRipCutscene({
   }, [])
   const n = outcome.packs.length
   const hasGold = outcome.packs.some((p) => p.cls === 'gold')
-  const packImg = '/skin/pack-standard-cut.png'
+  const packImg = RIP_PACK_SRC[tier]
 
   // Grid geometry (computed, deterministic): up to 5 columns, cards sized to
   // fit the measured stage; the whole spread stays inside the machine column.
@@ -1603,7 +1614,7 @@ export function VendingExperience(): React.ReactElement {
             !reduced &&
             !ripDone &&
             state.phase.outcome.packs.length > 0 && (
-              <PackRipCutscene outcome={state.phase.outcome} onFinish={() => setRipDone(true)} />
+              <PackRipCutscene outcome={state.phase.outcome} tier={machine} onFinish={() => setRipDone(true)} />
             )}
           {state.phase.kind === 'settled' && (!cutsceneOn || reduced || ripDone) && (
             <SettledPanel outcome={state.phase.outcome} onCollect={c.acknowledgeSettlement} />
