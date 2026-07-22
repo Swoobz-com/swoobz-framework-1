@@ -1,19 +1,31 @@
 # HANDOFF — AUTOMAT (originals/vending) · for the next Fable 5 session
 
-**Status at handoff (2026-07-22): 3-machine build, LIVE-VERIFIED. RONIN REMOVED.**
-Tim's decision 2026-07-22: "remove the ronin vending machine we dont need that
-for now" — machine #4 was fully unwired same day (codotty, orchestrator-verified:
-typecheck green, 37/37 vitest, vendingMath+vendingAudio hash-identical, grep
-sweep 0 ronin hits in active code, live 3-machine probe with viewed frames in
-`vending-run/shots-3machine-restore/`). Turntable is back to 3×120°.
-**Reversal is a copy-back**: pre-removal versions of all touched files live in
-`_parked-ronin-20260722/` (as `.bak` — rename to `.ts/.tsx` and restore; the
-tsconfig includes originals/vending recursively, so parked code must stay
-`.bak`). Ronin assets (mural/panel/room/roster webp's), `_qa-ronin.mjs`,
-`_gen-ronin-art.cjs` and `shots-ronin/` were left on disk, unreferenced.
-Section 8 below describes the REMOVED machine (kept as the reversal map);
-Tim's standalone Armory demo `streetfighter/pack-machine/` is untouched and
-remains the style reference of record.
+**Status at handoff (2026-07-22 end of day): 3-machine build, ALL QA GATES
+GREEN, UNDER GIT, ~95% ship-ready.** Section 4c is the log of what happened
+today (ronin removal → four-gate QA sweep → two fix rounds → git). The ONLY
+open ship item is lobby wiring, blocked on a lobby app existing at all —
+the game itself is done. Section 6 = the remaining list; section 5 = the
+learnings (five new ones from today at the bottom — read those before
+touching layout, git, or dispatching QA).
+
+**Git (NEW, 2026-07-22):** AUTOMAT's source lives in the `originals/` repo
+(its own git; commits `65e1f24` game + `060f4b0` landscape fix; NOTE the repo
+sat on branch `feat/abyss-line-audio-agentsmd` — ask Tim before renaming/
+merging). The export ROOT is a separate repo (`c0d6ddc`→) that IGNORES the
+five nested repos (originals/maze-runner/pulse-run/streetfighter/
+swoobz-vending) — see learning 14 before any `git add` at root. Commit
+vending work in the originals repo; identity is set repo-local (Tim /
+erwin@luckysledger.com). Orchestrator handles commits, makers never commit.
+
+**RONIN ZERO (machine #4) is REMOVED** (Tim, 2026-07-22: "we dont need that
+for now"). Reversal is a copy-back: pre-removal files in
+`_parked-ronin-20260722/` as `.bak` (MUST stay `.bak` — the vending-run
+tsconfig includes originals/vending recursively). Ronin assets/probes/shots
+left on disk unreferenced. Section 8 = the reversal map. Tim's standalone
+Armory demo `streetfighter/pack-machine/` is untouched and remains the style
+reference of record. The "demo dev buttons" Tim asked to remove were the
+ronin PREVIEW/barracks/prize overlays — four QA agents independently attested
+the shipped game has ZERO dev/demo UI in any state.
 
 Read this FIRST before touching this game, then `README.md` (math/RG story),
 `AUTOMAT-DOODLE-SKIN-SPEC.md` (art direction of record) and the three asset
@@ -98,7 +110,52 @@ generate product-shot on plain bg → `remove_background` → alpha-trim with pn
 fooled). Pack sprites are drawn as FULL silhouettes (no clip); mural cover-clipped to
 BODY in the bake; card faces get DOM number overlays (art stays text-free).
 
-## 4b. Current verified state (2026-07-20/21 — the RONIN session)
+## 4c. Session log 2026-07-22 (the removal + 100%-push session — READ THIS ONE)
+
+Orchestrator-led (Fable 5 steering codotty + the QA roster; every maker step
+independently verified — never accept a maker's self-report, it missed real
+defects twice today). Chronological:
+
+1. **RONIN removal** (Tim's call, morning). Parked backups made FIRST (no git
+   existed yet), then codotty unwired machine #4: turntable 3×120°, ~1150
+   lines of ronin code out of Experience/Canvas, `debitBalance` removed from
+   vendingProvider, roninPacks/roninProvider → `_parked-ronin-20260722/*.bak`.
+   Verified: typecheck, 37/37, vendingMath+vendingAudio hash-identical
+   (C5FE160B… / 8609C589…), grep 0 ronin hits, live 3-machine probe
+   (`shots-3machine-restore/`, frames VIEWED). A 5-agent QA fleet that was
+   mid-flight ON the ronin machine was stopped + its servers killed.
+2. **Four-gate QA sweep** (all first-time-ever): a11y PASS (contrast measured
+   from rendered pixels, all 3 tiers ≥4.5:1; focus ring was browser-default —
+   fragile), brand-cohesion PASS (1 MEDIUM: turntable arrows exceeded the
+   cyan budget), game-flow CONDITIONAL (VEND disabled silently when
+   balance < total; help modal stacked over COLLECT), mobile portrait PASS /
+   **landscape FAIL-CRITICAL** (width-only 940px breakpoint → landscape got
+   the portrait stack, zero UI at first paint).
+3. **Fix round 1** (codotty, 8 items, presentation-only): orientation-aware
+   breakpoint + landscape two-column layout; "TOTAL EXCEEDS BALANCE · LOWER
+   PACKS OR PRICE" disclosure line; help/settled overlay guard (one overlay
+   at a time); cutscene keyboard access (tabIndex + Enter/Space); arrows
+   de-cyaned to T.dim; explicit `:focus-visible` outline; skin-spec jobmap
+   synced; tab title "AUTOMAT · Swoobz Originals".
+4. **Blind re-verify round 2** (mobile-touch, fresh probes, distrust-maker):
+   original CRITICAL+HIGH CLOSED, but caught what codotty's smoke missed —
+   the `scale(0.82)` had shrunk CUTSCENE/picker/COLLECT to 36-38px runtime
+   (learning 13) and the toggle clipped 16px on iPhone landscape.
+5. **Fix round 2** (codotty): scale REMOVED, real layout compacted instead
+   (210px stage track, trimmed paddings, two secondary lines hidden
+   landscape-only). Measured after: all targets ≥44px, all four primary
+   controls inside 852×393 AND 915×412 at first paint, portrait identical
+   (grid 40.3/367.7 ≈ spec 44/372).
+6. **Orchestrator spot-check** of codotty's worry that price/packs steppers
+   were clipped in landscape: FALSE ALARM — page scrolls (docH 618), stepper
+   hit-test reaches the real 44px button (own probe `_orch-landscape-steppers
+   .mjs`). Verify before "fixing" a reported defect (learning 17).
+7. **Git**: root repo init + nested-repo untangling (learning 14), AUTOMAT
+   first-ever committed in the originals repo. All engine hashes re-proven
+   identical through every round. CEO status page kept current (artifact
+   `automat-ship-status`, ~95%).
+
+## 4b. Prior state (2026-07-20/21 — the RONIN session)
 
 What was DONE this session (chronological, all live-verified):
 1. Built Tim's standalone RONIN ZERO ARMORY pack machine
@@ -181,6 +238,35 @@ on 412px with 20 packs). Gates: typecheck green, 37/37 vitest, sim all tiers in 
     then contains fallback — keep that pattern in new probes.
 12. **(2026-07-20) The dev server binds ::1 (IPv6) only** on this box — probe
     `http://localhost:<port>`, never `127.0.0.1` (connection refused).
+13. **(2026-07-22) transform:scale breaks tap-targets invisibly** — a
+    `scale(0.82)` on the layout shell keeps source CSS declaring ~44px while
+    runtime rects measure 36-38px, AND the scaled box keeps its unscaled
+    layout height so it still overflows the fold. Source-only review AND the
+    maker's own smoke both missed it; only blind re-measurement caught it.
+    Never scale a layout to fit a viewport — compact the real layout. Always
+    QA computed rects on the live viewport. (Also in global memory:
+    `transform-scale-tap-targets.md`.)
+14. **(2026-07-22) The gitlink trap** — `git add -A` at the export root
+    silently stored originals/maze-runner/pulse-run/streetfighter/
+    swoobz-vending as mode-160000 gitlinks (each has its own `.git`): the
+    "commit of everything" contained NONE of their files, including this
+    game. Now handled: root `.gitignore` excludes those five; commit vending
+    work inside the originals repo. Before any first commit in a new root:
+    `git ls-files -s | findstr ^160000`. (Global memory:
+    `gitlink-nested-repo-trap.md`.)
+15. **(2026-07-22) Maker self-reports missed real defects TWICE today** —
+    codotty's smoke declared the scale-fix clean (it wasn't, learning 13),
+    and codotty's deviation note claimed steppers were clipped in landscape
+    (they weren't — page scroll works, hit-test proven). The loop that works:
+    maker fixes → BLIND re-verify with fresh probes by a different agent →
+    orchestrator spot-checks surprising claims himself before commissioning
+    another fix round.
+16. **(2026-07-22) PowerShell here-string + embedded double quotes broke
+    `git commit -m`** — the message was split into bogus pathspecs. Keep
+    commit messages free of `"` characters (or use a temp file with `-F`).
+17. **(2026-07-22) Verify a reported defect before fixing it** — the stepper
+    "clip" (learning 15) would have triggered a needless third fix round with
+    regression risk. One 5-minute orchestrator probe killed it.
 
 ## 6. What to do next (ranked, updated 2026-07-22 EVENING — post-100%-push)
 
@@ -198,19 +284,36 @@ DONE same day (all live-verified, evidence in vending-run/shots-*):
   own history — never gitlink them into root again); AUTOMAT lives in the
   originals repo (first commit 65e1f24).
 
-REMAINING:
-1. **Lobby wiring** — no lobby app exists in this export; needs Tim/product.
-2. **Portrait VEND below the fold** — intentional design, Tim's call if ever.
-3. **Gap-grade proofs if wanted**: video-frame flash-safety sweep (a11y did
-   code-level), 100ms tap-timing instrumentation (flow gate skipped it).
+REMAINING (in rank order — a fresh session starts at 1):
+1. **Lobby wiring** — no lobby app exists in this export; needs Tim/product
+   first. When it exists: the game is a single React component
+   (`VendingExperience`, mounted by `vending-run/src/main.tsx`) — wiring is
+   mount + route.
+2. **Portrait VEND below the fold** — intentional design (turntable gets the
+   first screen, Tim-decided column order §2); only change on Tim's explicit
+   ask.
+3. **Gap-grade proofs if wanted**: video-frame flash-safety sweep (a11y
+   verified at code/timing level only), 100ms tap-timing instrumentation
+   (flow gate reported it as a gap, not a pass), landscape scroll-region
+   polish for PACK PRICE/PACKS (reachable via page scroll today — fine, but
+   a dedicated scroll region would be nicer).
 4. **Empty-card art** (carried over from the old list).
-4. **If Tim wants RONIN back**: restore from `_parked-ronin-20260722/` (rename
-   `.bak` → `.ts/.tsx`, copy the three touched files back over the actual ones),
-   re-run gates, THEN run the QA-fleet pass it never got (taste/autisk/rg-c5/
-   jesse/mobile briefs from 2026-07-22 were written and dispatched but stopped
-   mid-run when Tim cut the machine — findings-in-progress live in the session
-   transcripts only). Parked backlog for that machine: bespoke red pack sprites,
+5. **If Tim wants RONIN back**: restore from `_parked-ronin-20260722/` (rename
+   `.bak` → `.ts/.tsx`, copy back over the actual files), re-run gates, THEN
+   run the QA-fleet pass it never got (taste/autisk/rg-c5/jesse/mobile — the
+   2026-07-22 briefs were dispatched but stopped mid-run when Tim cut the
+   machine). Parked backlog for that machine: bespoke red pack sprites,
    RONIN ZERO's own art, taiko/gong audio palette, barracks progress line.
+   NB: the removal predates the landscape work — a restored ronin panel has
+   NO landscape layout and needs the learning-13 treatment.
+
+HOW TO RUN THE NEXT SESSION (what worked today): orchestrate, don't do —
+codotty for all edits (presentation-only briefs with hash-proof demands on
+vendingMath/vendingAudio), specialist QA agents with own ports 5293-5297
+(detached Start-Process pattern, learning 2), BLIND re-verify after every fix
+round (learning 15), orchestrator commits in the originals repo after
+independent gates. Reply to Tim in Dutch; keep the CEO artifact
+(`automat-ship-status`) honest after every scope change.
 
 ## 7. QA tooling you inherit
 
@@ -219,12 +322,19 @@ REMAINING:
 Useful ready-made: `_qa-mobile-fix.mjs` (mobile blockers), `_qa-rip3.mjs` (cutscene
 frames), `_qa-tiers.mjs` (three machines; note it still clicks removed ARCADE/STREET
 chips — harmless no-ops), `_qa-help.mjs` (info overlay). Agents' own `_autisk-*.mjs` +
-`_qa-rgc5-*.mjs` also remain. NEW (2026-07-20): `_qa-ronin.mjs` = the RONIN
-machine's full-round probe (arm → 3×$50 buy → rip → receipt → enlist → mythical
-preview → prizes → barracks → back to EASY; asserts balance math + verify line;
-frames to `shots-ronin/`) and `_gen-ronin-art.cjs` = regenerates the three
-generated ronin skin PNGs (mural/room/panel) via headless-Chrome canvas.
-None are part of the build; keep them out of any commit.
+`_qa-rgc5-*.mjs` also remain. From 2026-07-20: `_qa-ronin.mjs` (ronin
+full-round probe, only useful after a ronin restore) and `_gen-ronin-art.cjs`
+(regenerates the ronin skin PNGs via headless-Chrome canvas).
+NEW (2026-07-22): `_qa-3machine-restore.mjs` (3-machine round on all tiers),
+`_qa-mobiletouch-{portrait,landscape}.mjs` + `_reverify2_*.mjs` (hit-target +
+first-paint measurement probes — the landscape regression suite),
+`_a11y-*.mjs` (contrast/focus/flow/reduced-motion), `_flowqa-full.mjs`
+(8-journey gate), `_qa-brand-cohesion-audit.mjs`, `_orch-landscape-steppers
+.mjs` (stepper reachability hit-test). Evidence in the matching `shots-*`
+folders. None are part of the build; all are gitignored (root `.gitignore`
+patterns `_qa-*/_a11y*/_flowqa*/_orch-*/_reverify*/_codotty-*/_autisk-*/
+_jesse-*/_gen-*`) — keep new probes inside those prefixes so they stay out
+of commits automatically.
 
 ## 8. Machine #4: RONIN ZERO fighter packs (added 2026-07-20, **REMOVED 2026-07-22** — this section is now the reversal map; code in `_parked-ronin-20260722/`)
 
