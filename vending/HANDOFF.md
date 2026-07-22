@@ -189,6 +189,23 @@ on 412px with 20 packs). Gates: typecheck green, 37/37 vitest, sim all tiers in 
 0 page errors across all runs. Full chronological log: auto-memory
 `automat-vending-status.md` (this session's diary — read it for the why of everything).
 
+## 4d. Slot-pick feature (2026-07-22, commit 5d7aaac — after the dropdown fix d6e8dc8)
+
+Tim's ask: optionally punch your own slots like a real machine. Built by
+codotty, orchestrator blind-verified + committed. 20 DOM hit-cells over the
+canvas glass (codes A1..D5 always visible, aria-pressed, keyboard free),
+tier-LED steady glow + finite 460ms bloom on select (reduced-motion gated),
+FIFO cap at packCount, CLEAR chip, picks clear on settle/rotate, inert
+outside ready. VEND freezes a presentation-only `slotOrder` (Experience
+`computeSlotOrder`) that routes the canvas drops; empty selection ==
+byte-exact today (packIndex order). MONEY LAW held: vendingMath/vendingAudio
+hash-identical, vendingProvider untouched, rolls stay seed+packIndex.
+Cell rects: 68x92 desktop / 45.3x61.2 portrait 412 (>=44px). Evidence:
+`vending-run/shots-slotsel/` + probe `_qa-slotsel.mjs`. Same day, earlier:
+price/packs dropdown white-on-white fixed (colorScheme dark + plaque-styled
+options, commit d6e8dc8). NOTE overlay wraps the canvas in a relative div —
+any future canvas-box change must keep that wrapper.
+
 ## 5. Learnings (will bite you if ignored)
 
 1. **PowerShell copies corrupt '·'**: `Get-Content -Raw` on BOM-less UTF-8 decodes as
