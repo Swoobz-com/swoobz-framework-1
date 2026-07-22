@@ -1,21 +1,29 @@
 # HANDOFF — AUTOMAT (originals/vending) · for the next Fable 5 session
 
-**Status at handoff (2026-07-22 end of day): 3-machine build, ALL QA GATES
-GREEN, UNDER GIT, ~95% ship-ready.** Section 4c is the log of what happened
-today (ronin removal → four-gate QA sweep → two fix rounds → git). The ONLY
-open ship item is lobby wiring, blocked on a lobby app existing at all —
-the game itself is done. Section 6 = the remaining list; section 5 = the
-learnings (five new ones from today at the bottom — read those before
-touching layout, git, or dispatching QA).
+**Status at handoff (2026-07-22 LATE evening, HEAD 598708a pushed): 3-machine
+build + OPTIONAL SLOT-PICK feature + per-machine pack skins, five-agent
+swoobz QA fleet run and all its findings closed, ON GITHUB, ~95%
+ship-ready.** Read `AGENTVENDING.md` FIRST (the short law card for any agent
+touching this game), then this file. Section 4c = the ronin-removal/100%-push
+session; 4d = the slot-pick feature (A1..D5 punch codes, cyan ambient glow,
+FIFO, bright-queue coupling); 4e = the QA-fleet round + its three fixes +
+per-machine pack skins (storm/obsidian boosters, rip cutscene follows the
+machine). The ONLY open ship item is lobby wiring, blocked on a lobby app
+existing at all. Section 6 = the remaining list; section 5 = learnings 1-19
+(18 and 19 are from the QA round — read before touching overlays or
+decorative art).
 
-**Git (NEW, 2026-07-22):** AUTOMAT's source lives in the `originals/` repo
-(its own git; commits `65e1f24` game + `060f4b0` landscape fix; NOTE the repo
-sat on branch `feat/abyss-line-audio-agentsmd` — ask Tim before renaming/
-merging). The export ROOT is a separate repo (`c0d6ddc`→) that IGNORES the
-five nested repos (originals/maze-runner/pulse-run/streetfighter/
-swoobz-vending) — see learning 14 before any `git add` at root. Commit
-vending work in the originals repo; identity is set repo-local (Tim /
-erwin@luckysledger.com). Orchestrator handles commits, makers never commit.
+**Git (updated 2026-07-22 late):** AUTOMAT's source lives in the `originals/`
+repo, branch `feat/abyss-line-audio-agentsmd` (ask Tim before renaming/
+merging), remote `github.com/Swoobz-com/swoobz-framework-1` — PUSHED through
+`598708a`; plain `git push` works. The export ROOT repo now has remote
+`github.com/Swoobz-com/swoobz-games-export` (main = live export; the old
+2026-07-09 snapshot is preserved as branch `export-20260709`); it still
+IGNORES the five nested repos (learning 14 — never `git add` game files at
+root). STANDOFF (streetfighter) is pushed as branch `standoff` in that same
+repo. Tim's law: ONE repo per surface, NEVER create a new repo — push to
+these existing remotes. Identity repo-local (Tim / erwin@luckysledger.com).
+Orchestrator verifies + commits + pushes; makers never commit.
 
 **RONIN ZERO (machine #4) is REMOVED** (Tim, 2026-07-22: "we dont need that
 for now"). Reversal is a copy-back: pre-removal files in
@@ -329,11 +337,24 @@ DONE same day (all live-verified, evidence in vending-run/shots-*):
   own history — never gitlink them into root again); AUTOMAT lives in the
   originals repo (first commit 65e1f24).
 
+DONE 2026-07-22 late evening (all orchestrator-verified + pushed, log in 4d/4e):
+- Price/packs dropdown dark-scheme fix; optional slot-pick (A1..D5, cyan
+  ambient glow, FIFO, clear-on-vend, bright-queue-follows-picks, rip-cutscene
+  follows the machine); per-machine pack skins (storm/obsidian, 4cr);
+  five-agent swoobz QA fleet round with all three findings fixed and
+  re-verified (dimLift contrast 11.03:1, no slot-pick on compact landscape,
+  plateau-disc pointer-events); AGENTVENDING.md; GitHub remotes wired + pushed.
+
 REMAINING (in rank order — a fresh session starts at 1):
 1. **Lobby wiring** — no lobby app exists in this export; needs Tim/product
    first. When it exists: the game is a single React component
    (`VendingExperience`, mounted by `vending-run/src/main.tsx`) — wiring is
    mount + route.
+1b. **Slot-pick on compact landscape** — deliberately NOT OFFERED there
+   (learning 18: cells shrink to 27px inside the 210px stage; 5x44px cannot
+   fit). Revisit only if the landscape layout ever gets a wider stage.
+   Also: gold pack stays SHARED across machines (RG class marker) — do not
+   "theme" it per machine without a new Tim ruling.
 2. **Portrait VEND below the fold** — intentional design (turntable gets the
    first screen, Tim-decided column order §2); only change on Tim's explicit
    ask.
