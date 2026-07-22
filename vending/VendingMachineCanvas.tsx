@@ -47,6 +47,22 @@ const PACK_H = 58
  *  rests INSIDE this opening, never outside the machine. */
 const TRAY = { x: 150, y: 628, w: 220, h: 64 } as const
 
+// ── Slot-selection overlay (OPTIONAL feature) geometry (module consts) ───────
+// A DOM hit-cell sits over every glass pack slot. Codes: shelves A-D (top→
+// bottom) × columns 1-5 → A1..A5, B1..B5, C1..C5, D1..D5. Cells are sized to
+// the slot pitch (col 68px / row 100px) so they stay >=44px on the smallest
+// portrait render; the code tag + glow are drawn in DOM, never baked into art.
+const SLOT_CELL_W = 68
+const SLOT_CELL_H = 92
+/** On-select bloom duration (RG-C5 module const — identical for every slot,
+ *  tier value, price and streak; keyed only to the select gesture). */
+const SLOT_BLOOM_MS = 460
+const SHELF_LETTERS = ['A', 'B', 'C', 'D'] as const
+/** Slot index (0..19, shelf-major) → punch-code tag (A1..D5). */
+function slotCode(slot: number): string {
+  return `${SHELF_LETTERS[Math.floor(slot / 5)] ?? '?'}${(slot % 5) + 1}`
+}
+
 // ── Vend choreography timings (module consts, RG-C5) ────────────────────────
 // Drop path per the machnicsdrop reference video: coil turn → the pack falls
 // STRAIGHT DOWN inside the glass chamber (clipped — it vanishes behind the
@@ -554,6 +570,23 @@ export interface VendingMachineCanvasProps {
   /** True for the dimmed background machines on the turntable: rendering is
    *  throttled to ~3fps (they only idle) so three mounted canvases stay cheap. */
   backdrop?: boolean
+  /** OPTIONAL slot-picking (pure presentation): packIndex → physical slot the
+   *  drop choreography vends from. Frozen at VEND time by the Experience; the
+   *  ROLLS/order/receipt are untouched — this only re-routes which glass slot a
+   *  pack visually emerges from. Undefined → today's default (packIndex order). */
+  slotOrder?: readonly number[]
+  /** Currently selected slots (selection order), for the interactive front
+   *  machine only — drives the code-tag glow. Undefined on backdrop machines. */
+  selectedSlots?: readonly number[]
+  /** Toggle a slot's selection. Provided ONLY for the interactive front
+   *  machine; when absent the overlay does not render (backdrop machines). */
+  onToggleSlot?: (slot: number) => void
+  /** Whether toggles are live (ready phase). Inert (pointer-events off) mid-
+   *  vend / during overlays — matching the armTierReducer no-op discipline. */
+  slotSelectEnabled?: boolean
+  /** Tier LED color for the steady selection glow (difficulty identity color,
+   *  never value/streak keyed — RG-C5). */
+  ledColor?: string
 }
 
 /** Per-machine shells (Tim: each machine is its OWN machine). */
@@ -672,8 +705,17 @@ export function VendingMachineCanvas({
   reducedMotion,
   tier,
   backdrop = false,
+  slotOrder,
+  selectedSlots,
+  onToggleSlot,
+  slotSelectEnabled = false,
+  ledColor = COL.neon,
 }: VendingMachineCanvasProps): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // slotOrder mirrored into a ref so the dispense effect reads the value frozen
+  // at VEND time without needing it in the dependency array.
+  const slotOrderRef = useRef(slotOrder)
+  slotOrderRef.current = slotOrder
   // Props mirrored into refs so the single rAF loop reads current values.
   const propsRef = useRef({ phaseKind, packCount, reducedMotion, tier, backdrop })
   propsRef.current = { phaseKind, packCount, reducedMotion, tier, backdrop }
@@ -695,7 +737,11 @@ export function VendingMachineCanvas({
     const now = performance.now()
     for (let i = seenRef.current; i < dispensed.length; i++) {
       const p = dispensed[i]!
-      const slot = p.packIndex % TOTAL_SLOTS
+      // OPTIONAL slot pick: the physical slot this pack drops from. The order
+      // is the Experience's frozen presentation map — never the roll (money
+      // law). Falls back to today's packIndex order when no picks were made.
+      const mapped = slotOrderRef.current?.[p.packIndex]
+      const slot = mapped != null ? mapped % TOTAL_SLOTS : p.packIndex % TOTAL_SLOTS
       dropsRef.current.push({ startedAt: now, cls: p.cls, slot })
       emptiedRef.current.add(slot)
     }
@@ -1246,12 +1292,116 @@ export function VendingMachineCanvas({
     return () => cancelAnimationFrame(raf)
   }, [])
 
+  // OPTIONAL slot-selection overlay: DOM hit-cells over the glass slots, given
+  // for free keyboard + screen-reader access. Renders ONLY for the interactive
+  // front machine (onToggleSlot present) — backdrop machines get none. The cells
+  // are positioned in PERCENTAGES of the logical 520x760 frame, so they track
+  // the canvas box exactly across resize/orientation with no measurement (the
+  // canvas keeps the same aspect ratio at every width — avoids the learning-3
+  // detached-ref trap entirely). The container is pointer-events:none so only
+  // the cells (never the gutters or the area outside the glass) catch input.
+  const overlay = onToggleSlot ? (
+    <div aria-hidden={false} style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 4 }}>
+      <style>{`
+        @keyframes vendSlotBloom {
+          0%   { opacity: 0.95; transform: scale(1.55); }
+          100% { opacity: 0;    transform: scale(1); }
+        }
+        .vend-slot-bloom { animation: vendSlotBloom ${SLOT_BLOOM_MS}ms ease-out both; }
+        @media (prefers-reduced-motion: reduce) {
+          .vend-slot-bloom { animation: none; opacity: 0; }
+        }
+        .vend-slot-cell:hover:not(:disabled) .vend-slot-tag,
+        .vend-slot-cell:focus-visible .vend-slot-tag { color: #e8ecf1; }
+      `}</style>
+      {Array.from({ length: TOTAL_SLOTS }, (_, slot) => {
+        const shelf = Math.floor(slot / 5)
+        const col = slot % 5
+        const cx = SLOT_XS[col]!
+        const cy = SHELF_YS[shelf]! - PACK_H / 2 - 4
+        const selected = !!selectedSlots?.includes(slot)
+        const order = selectedSlots?.indexOf(slot) ?? -1
+        return (
+          <button
+            key={slot}
+            type="button"
+            className="vend-slot-cell"
+            aria-label={`Select slot ${slotCode(slot)}`}
+            aria-pressed={selected}
+            disabled={!slotSelectEnabled}
+            onClick={() => onToggleSlot(slot)}
+            style={{
+              position: 'absolute',
+              left: `${((cx - SLOT_CELL_W / 2) / W) * 100}%`,
+              top: `${((cy - SLOT_CELL_H / 2) / H) * 100}%`,
+              width: `${(SLOT_CELL_W / W) * 100}%`,
+              height: `${(SLOT_CELL_H / H) * 100}%`,
+              padding: 0,
+              margin: 0,
+              border: `1px solid ${selected ? ledColor : 'rgba(255,255,255,0.10)'}`,
+              borderRadius: 9,
+              background: selected ? `${ledColor}1f` : 'transparent',
+              boxShadow: selected ? `0 0 14px 1px ${ledColor}, inset 0 0 10px ${ledColor}55` : 'none',
+              cursor: slotSelectEnabled ? 'pointer' : 'default',
+              pointerEvents: slotSelectEnabled ? 'auto' : 'none',
+              touchAction: 'manipulation',
+              transition: 'box-shadow 200ms ease, border-color 200ms ease, background 200ms ease',
+            }}
+          >
+            {/* One-shot bloom ring — flashes on select, then fades to 0; the
+                steady glow lives on the button box-shadow above. Gated under
+                reduced-motion (steady glow stays). */}
+            {selected && (
+              <span
+                key={`bloom-${order}`}
+                aria-hidden
+                className="vend-slot-bloom"
+                style={{
+                  position: 'absolute',
+                  inset: -2,
+                  borderRadius: 11,
+                  border: `2px solid ${ledColor}`,
+                  boxShadow: `0 0 18px 4px ${ledColor}`,
+                  pointerEvents: 'none',
+                }}
+              />
+            )}
+            {/* Punch-code tag (A1..D5), always visible, mono, calm dim. */}
+            <span
+              className="vend-slot-tag"
+              style={{
+                position: 'absolute',
+                top: 3,
+                left: 4,
+                fontFamily: '"Geist Mono", ui-monospace, monospace',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.04em',
+                color: selected ? ledColor : '#9aa3b2',
+                background: 'rgba(6,8,12,0.62)',
+                borderRadius: 4,
+                padding: '1px 4px',
+                lineHeight: 1.2,
+                pointerEvents: 'none',
+              }}
+            >
+              {slotCode(slot)}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  ) : null
+
   return (
-    <canvas
-      ref={canvasRef}
-      role="img"
-      aria-label="AUTOMAT vending machine dispensing multiplier packs"
-      style={{ width: '100%', maxWidth: W, height: 'auto', display: 'block' }}
-    />
+    <div style={{ position: 'relative', width: '100%', maxWidth: W, margin: '0 auto' }}>
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label="AUTOMAT vending machine dispensing multiplier packs"
+        style={{ width: '100%', maxWidth: W, height: 'auto', display: 'block' }}
+      />
+      {overlay}
+    </div>
   )
 }

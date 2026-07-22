@@ -176,6 +176,29 @@ const EMPTY_PACKS: readonly PackResult[] = []
  *  (coil + chamber fall + hidden beat + bay drop). */
 const CHIP_SYNC_MS = 880
 
+/** Pure presentation map packIndex → physical vend slot for the OPTIONAL
+ *  slot-pick feature. The first `min(selected, packCount)` packs vend from the
+ *  chosen slots in selection order; the rest auto-fill the lowest UNUSED slots
+ *  (never reusing a slot vended this round) — exactly today's 0,1,2… order when
+ *  nothing is picked. Rolls/reveal-order/receipt never see this (money law). */
+function computeSlotOrder(selected: readonly number[], packCount: number): number[] {
+  const order: number[] = []
+  const used = new Set<number>()
+  const k = Math.min(selected.length, packCount)
+  for (let i = 0; i < k; i++) {
+    order.push(selected[i]!)
+    used.add(selected[i]!)
+  }
+  let auto = 0
+  for (let i = k; i < packCount; i++) {
+    while (used.has(auto)) auto++
+    order.push(auto)
+    used.add(auto)
+    auto++
+  }
+  return order
+}
+
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false)
   useEffect(() => {
@@ -1072,6 +1095,33 @@ export function VendingExperience(): React.ReactElement {
   const phaseKind = state.phase.kind
   const tier = machine
   const stageRef = useRef<HTMLDivElement | null>(null)
+  // ── OPTIONAL slot selection (pure presentation) ──────────────────────────
+  // Which glass slots the player punched, in selection order (FIFO). Max =
+  // current packCount; the (n+1)th pick drops the OLDEST. Selecting never
+  // touches the rolls — only which physical slot each pack visibly vends from.
+  const [selectedSlots, setSelectedSlots] = useState<number[]>([])
+  // The slot→pack map FROZEN at VEND time so a settle-time clear can't move the
+  // in-flight drops (the canvas bakes each drop's slot on dispense anyway).
+  const [committedSlotOrder, setCommittedSlotOrder] = useState<readonly number[] | null>(null)
+  const packCount = state.packCount
+  const toggleSlot = (slot: number): void => {
+    if (phaseKind !== 'ready') return // inert mid-vend / during overlays
+    setSelectedSlots((prev) => {
+      if (prev.includes(slot)) return prev.filter((s) => s !== slot)
+      const next = [...prev, slot]
+      while (next.length > packCount) next.shift() // FIFO: drop the oldest pick
+      return next
+    })
+  }
+  // packCount lowered below the pick count → trim the NEWEST picks to fit.
+  useEffect(() => {
+    setSelectedSlots((prev) => (prev.length > packCount ? prev.slice(0, packCount) : prev))
+  }, [packCount])
+  // Selection clears once the vend settles; the frozen map resets back at ready.
+  useEffect(() => {
+    if (phaseKind === 'settled') setSelectedSlots([])
+    if (phaseKind === 'ready') setCommittedSlotOrder(null)
+  }, [phaseKind])
   useEffect(() => {
     if (phaseKind === 'vending') setRipDone(false)
     // One overlay at a time: the vend/settled ceremony owns the screen, so the
@@ -1101,6 +1151,7 @@ export function VendingExperience(): React.ReactElement {
   const armMachine = (target: VendingTierId): void => {
     setMachine(target)
     c.setTier(target)
+    setSelectedSlots([]) // picks are per-machine; a rotate clears them
   }
   const switchTier = (target: VendingTierId): void => {
     if (target === machine || phaseKind === 'vending') return
@@ -1368,6 +1419,11 @@ export function VendingExperience(): React.ReactElement {
                     reducedMotion={reduced}
                     tier={t}
                     backdrop={!isActive}
+                    slotOrder={isActive ? committedSlotOrder ?? undefined : undefined}
+                    selectedSlots={isActive ? selectedSlots : undefined}
+                    onToggleSlot={isActive ? toggleSlot : undefined}
+                    slotSelectEnabled={isActive && phaseKind === 'ready'}
+                    ledColor={TIER_ROOMS[t].led}
                   />
                 </div>
               )
@@ -1444,6 +1500,52 @@ export function VendingExperience(): React.ReactElement {
                   hidden={cutsceneOn && !reduced}
                 />
               ))}
+            {/* Slot-pick hint (ready only): calm, optional, no urgency. Lives in
+                the otherwise-empty rail so it never disturbs the tuned mobile
+                folds. */}
+            {phaseKind === 'ready' && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  fontFamily: T.mono,
+                  fontSize: 12,
+                  letterSpacing: '0.06em',
+                  color: T.dim,
+                }}
+              >
+                <span>PICK YOUR SLOTS · OPTIONAL</span>
+                <span style={{ color: selectedSlots.length > 0 ? T.cyan : T.faint, fontWeight: 700 }}>
+                  {selectedSlots.length} SELECTED
+                </span>
+                {selectedSlots.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSlots([])}
+                    aria-label="Clear slot selection"
+                    style={{
+                      fontFamily: T.mono,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      letterSpacing: '0.06em',
+                      color: T.dim,
+                      background: 'transparent',
+                      border: `1px solid ${T.cardEdge}`,
+                      borderRadius: 7,
+                      padding: '4px 9px',
+                      minHeight: 28,
+                      cursor: 'pointer',
+                      touchAction: 'manipulation',
+                    }}
+                  >
+                    CLEAR
+                  </button>
+                )}
+              </div>
+            )}
             {phaseKind === 'vending' && (
               <div style={{ fontFamily: T.mono, fontSize: 12, color: T.faint, textAlign: 'center' }}>
                 VENDING {state.dispensed.length}/{committedCount}
@@ -1586,7 +1688,12 @@ export function VendingExperience(): React.ReactElement {
             className="vend-cta"
             onClick={() => {
               if (phaseKind === 'vending') c.skipReveal()
-              else void c.vendPacks()
+              else {
+                // Freeze the presentation slot map for this round BEFORE the
+                // commit (rolls unaffected — this only routes the drops).
+                setCommittedSlotOrder(computeSlotOrder(selectedSlots, state.packCount))
+                void c.vendPacks()
+              }
             }}
             disabled={phaseKind !== 'vending' && !c.canVend}
             style={(() => {
