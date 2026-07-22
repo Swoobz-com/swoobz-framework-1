@@ -182,14 +182,28 @@ on 412px with 20 packs). Gates: typecheck green, 37/37 vitest, sim all tiers in 
 12. **(2026-07-20) The dev server binds ::1 (IPv6) only** on this box — probe
     `http://localhost:<port>`, never `127.0.0.1` (connection refused).
 
-## 6. What to do next (ranked, updated 2026-07-22 — post-ronin-removal)
+## 6. What to do next (ranked, updated 2026-07-22 EVENING — post-100%-push)
 
-1. **Full orchestrator QA sweep on the 3-machine game before any "ship" claim**
-   — a11y + brand-cohesion have NEVER run; the 2026-07-16 six-agent sweep
-   predates several sessions. Landscape 915×412 is still unverified for the
-   whole game.
-2. **Lobby wiring + git** (repo root still has no git — coordinate, do it once).
-3. **Empty-card art** (carried over from the old list).
+DONE same day (all live-verified, evidence in vending-run/shots-*):
+- Full QA sweep ran: a11y PASS (measured contrast, focus ring added,
+  cutscene keyboard access), brand-cohesion PASS (arrows de-cyaned, spec
+  jobmap synced), game-flow CONDITIONAL→fixed (balance-disclosure line,
+  help/settled overlay guard), mobile portrait PASS + LANDSCAPE built and
+  verified across two rounds (orientation-aware breakpoint, NO transform-
+  scale — it broke 44px targets; compact real layout instead; all four
+  primary controls in the 852×393 fold, steppers reachable via page scroll,
+  all targets ≥44px runtime-measured).
+- Git exists now: root repo (this export dir) ignores the five NESTED repos
+  (originals/maze-runner/pulse-run/streetfighter/swoobz-vending each have
+  own history — never gitlink them into root again); AUTOMAT lives in the
+  originals repo (first commit 65e1f24).
+
+REMAINING:
+1. **Lobby wiring** — no lobby app exists in this export; needs Tim/product.
+2. **Portrait VEND below the fold** — intentional design, Tim's call if ever.
+3. **Gap-grade proofs if wanted**: video-frame flash-safety sweep (a11y did
+   code-level), 100ms tap-timing instrumentation (flow gate skipped it).
+4. **Empty-card art** (carried over from the old list).
 4. **If Tim wants RONIN back**: restore from `_parked-ronin-20260722/` (rename
    `.bak` → `.ts/.tsx`, copy the three touched files back over the actual ones),
    re-run gates, THEN run the QA-fleet pass it never got (taste/autisk/rg-c5/

@@ -178,9 +178,18 @@ function useReducedMotion(): boolean {
 
 // ── Small building blocks ───────────────────────────────────────────────────
 
-function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }): React.ReactElement {
+function Card({
+  children,
+  style,
+  className,
+}: {
+  children: React.ReactNode
+  style?: React.CSSProperties
+  className?: string
+}): React.ReactElement {
   return (
     <div
+      className={`vend-card${className ? ` ${className}` : ''}`}
       style={{
         position: 'relative',
         overflow: 'hidden',
@@ -1121,6 +1130,7 @@ export function VendingExperience(): React.ReactElement {
 
   return (
     <div
+      className="vend-root"
       style={{
         ['--tier-led' as string]: TIER_ROOMS[tier].led,
         ['--tier-panel' as string]: `url("/skin/panel-${tier}.png")`,
@@ -1209,16 +1219,37 @@ export function VendingExperience(): React.ReactElement {
            first paint. The machine is capped so it fits the low height. */
         @media (max-width: 940px) and (orientation: landscape) {
           /* Fixed stage track (a flexible 1fr collapses to min-content in an
-             auto-width grid), plus a top-anchored down-scale so the machine +
-             the panel's BALANCE / picker / VEND all clear the short fold. */
+             auto-width grid). NO transform-scale: a down-scale shrank every
+             touch target below the 44px floor (CUTSCENE / picker chips / COLLECT
+             all landed ~36-38px) AND, because a scaled box keeps its unscaled
+             layout height, still overflowed the short fold. Instead we COMPACT
+             the real layout — trimmed root padding, tighter column gap, slimmer
+             card padding — so BALANCE + picker + VEND + CUTSCENE all clear the
+             393px fold while every control keeps its true >=44px height. */
+          .vend-root { padding: 6px 12px 10px !important; }
           .vend-shell {
-            grid-template-columns: minmax(0, 240px) 300px;
-            gap: 16px;
+            grid-template-columns: minmax(0, 210px) minmax(0, 300px);
+            gap: 14px;
             align-items: start;
-            transform: scale(0.82);
-            transform-origin: top center;
           }
-          .vend-stage .vend-turntable { max-width: 240px; }
+          .vend-stage .vend-turntable { max-width: 200px; }
+          .vend-controls { gap: 6px !important; }
+          .vend-card { padding: 8px 13px 7px !important; }
+          /* Identity plaque carries the most vertical fat (wordmark + subtitle +
+             BALANCE row + compliance line); pull its internal rhythm tight so it
+             does not push VEND/CUTSCENE past the fold. */
+          .vend-card-id { padding-top: 7px !important; padding-bottom: 6px !important; }
+          .vend-card-id > div { margin-top: 5px !important; padding-top: 4px !important; }
+          /* In the short fold, drop the two duplicative secondary lines: the
+             decorative tagline and the odds caption (difficulty is still read
+             from the picker chips + LED + room glow; the odds live in help).
+             Keeps BALANCE + picker + VEND + CUTSCENE inside 393px. Portrait
+             shows both in full. */
+          .vend-id-sub { display: none !important; }
+          .vend-machine-caption { display: none !important; }
+          /* VEND stays a big primary target but trimmed vertical padding keeps
+             the four-item stack inside the fold (16->12px => ~46px tall). */
+          .vend-cta { padding-top: 12px !important; padding-bottom: 12px !important; }
         }
         .vend-stage { perspective: 1300px; }
         .rip-pack-in { animation: ripPackIn 550ms cubic-bezier(0.2, 1.2, 0.3, 1) both; }
@@ -1429,8 +1460,8 @@ export function VendingExperience(): React.ReactElement {
 
         {/* ── Control column (own stacking layer: the 3D turntable's side
             machines must never paint over the controls). ── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', zIndex: 3 }}>
-          <Card>
+        <div className="vend-controls" style={{ display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', zIndex: 3 }}>
+          <Card className="vend-card-id">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
               <div>
                 <div style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: '0.22em', color: T.faint }}>
@@ -1439,7 +1470,7 @@ export function VendingExperience(): React.ReactElement {
                 <div style={{ fontWeight: 800, fontSize: 22, letterSpacing: '0.06em', marginTop: 2 }}>
                   AUTOMAT
                 </div>
-                <div style={{ fontSize: 12, color: T.dim, marginTop: 2 }}>
+                <div className="vend-id-sub" style={{ fontSize: 12, color: T.dim, marginTop: 2 }}>
                   The multiplier vending machine
                 </div>
               </div>
@@ -1523,6 +1554,7 @@ export function VendingExperience(): React.ReactElement {
               ))}
             </div>
             <div
+              className="vend-machine-caption"
               style={{
                 fontFamily: T.mono,
                 fontSize: 11,
@@ -1539,6 +1571,7 @@ export function VendingExperience(): React.ReactElement {
               ready; while vending it becomes the reveal-pace SKIP. */}
           <button
             type="button"
+            className="vend-cta"
             onClick={() => {
               if (phaseKind === 'vending') c.skipReveal()
               else void c.vendPacks()
