@@ -77,6 +77,18 @@ const selectStyle: React.CSSProperties = {
   padding: '0 10px',
   cursor: 'pointer',
   touchAction: 'manipulation',
+  // The native option popup follows the page's color-scheme; without this it
+  // renders a white list whose options inherit light text = white on white.
+  colorScheme: 'dark',
+}
+
+/** Options render in the browser's native popup, outside our DOM skin — give
+ *  them the machine-plaque material explicitly so the list reads as the game. */
+const selectOptionStyle: React.CSSProperties = {
+  background: T.plaque,
+  color: T.text,
+  fontFamily: T.mono,
+  fontWeight: 600,
 }
 
 /** Per-machine rooms (Tim: elke difficulty zijn eigen achtergrond + gloed-
@@ -1654,12 +1666,12 @@ export function VendingExperience(): React.ReactElement {
                   style={selectStyle}
                 >
                   {!PRICE_LADDER.includes(state.wagerPerPackLamports) && (
-                    <option value={state.wagerPerPackLamports.toString()}>
+                    <option value={state.wagerPerPackLamports.toString()} style={selectOptionStyle}>
                       {formatUsdc(state.wagerPerPackLamports)}
                     </option>
                   )}
                   {PRICE_LADDER.map((p) => (
-                    <option key={p.toString()} value={p.toString()}>
+                    <option key={p.toString()} value={p.toString()} style={selectOptionStyle}>
                       {formatUsdc(p)}
                     </option>
                   ))}
@@ -1698,7 +1710,7 @@ export function VendingExperience(): React.ReactElement {
                   style={selectStyle}
                 >
                   {Array.from({ length: MAX_PACKS }, (_, i) => i + 1).map((n) => (
-                    <option key={n} value={n}>
+                    <option key={n} value={n} style={selectOptionStyle}>
                       {n === MAX_PACKS ? `${n} PACKS · MAX` : `${n} PACK${n > 1 ? 'S' : ''}`}
                     </option>
                   ))}
