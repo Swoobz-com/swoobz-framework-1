@@ -206,6 +206,32 @@ price/packs dropdown white-on-white fixed (colorScheme dark + plaque-styled
 options, commit d6e8dc8). NOTE overlay wraps the canvas in a relative div —
 any future canvas-box change must keep that wrapper.
 
+## 4e. QA-fleet round + pack skins (2026-07-22 evening, commits d222e9d + ce1539f, PUSHED to github Swoobz-com/swoobz-framework-1)
+
+Five swoobz-* agents on the slot-pick feature: RG-C5 PASS 6/6 attested ·
+brand PASS (cyan = reused job 3, spec updated) · a11y FAIL→fixed (hint line
+1.7-4.6:1 → T.dimLift #b7c1d0, re-measured 11.03:1 all tiers) · mobile
+CRITICAL→fixed (landscape stage ~210px shrinks percent-cells to 27x37px,
+5x44px physically cannot fit → slot-pick NOT OFFERED on compact landscape,
+portrait/desktop full) · flow CRITICAL→fixed (plateau-disc art painted over
+CLEAR on desktop = dead button → pointer-events:none). All fixes re-verified
+with real mouse/touch. AGENTVENDING.md added (agent law card). THEN
+per-machine pack skins (Tim): storm + obsidian standard boosters generated
+on-model (4cr, job ids in skin MANIFEST), GOLD pack stays shared (class
+marker); PACK_STD_SRC per-tier map in the canvas; live-verified all four
+sprites load + per-tier packs visible + obsidian drop on HARD.
+
+Two NEW learnings (18, 19):
+18. **Percent-overlay over a responsively-compacted canvas = invisible
+    tap-target shrink** (learning-13 class, new mechanism): DOM cells sized
+    as % of a canvas box shrink with it — landscape's 210px stage made 44px
+    portrait cells 27px. Measure overlay targets at EVERY breakpoint the
+    underlying box changes size.
+19. **Decorative art divs must set pointer-events:none** — an aria-hidden
+    plateau shadow painted over the CLEAR chip and silently ate every click
+    on desktop only. DOM-dispatch probes (el.click()) CANNOT catch this
+    class; only real-mouse elementFromPoint/click probes can.
+
 ## 5. Learnings (will bite you if ignored)
 
 1. **PowerShell copies corrupt '·'**: `Get-Content -Raw` on BOM-less UTF-8 decodes as
