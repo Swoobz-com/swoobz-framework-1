@@ -21,7 +21,40 @@ LAST VENDS inside the desktop fold (F8) · tier backdrops normalized
 cover/center-bottom (F9) · AUTOMAT favicon (F10, in vending-run/index.html —
 committed in the ROOT repo, see open item 4).
 
+### Overlap-sweep addendum (same day, HEAD c7aabab, pushed — OVERLAP-VRIJ)
+
+Tim asked "qa test of niks geks overlapt" → full autisk matrix (5 viewports ×
+7 states) found 1 blocker + 7 clear defects; 3 codotty rounds + 2 blind autisk
+re-verifies closed ALL of them (see the commit message of c7aabab for the
+list). Highlights a fresh session must know:
+- **Cutscene card faces now size from the card box with a worst-case character
+  budget from the bet** (class-uniform per spread — RG-C5). The old
+  `Math.max(15, …)` floor was how landscape escaped containment.
+- **Payout ribbon is clamped below the grid** via measured budgets
+  (ResizeObserver on ribbon+header; levers: row gap → card box → top clamp).
+  The rip box was measured ONCE at mount before (12-16px stale) — now observed.
+- **Settled panel** = internal scroller + COLLECT pinned as a SIBLING (probes
+  that parent-walk from COLLECT to the scroller are stale: ov3/ov4).
+- **Provider "reset on rotate" is a PHANTOM**: only Chrome devtools' isMobile
+  emulation TOGGLE reloads the document; real rotate/resize keeps state
+  (window-marker proof in shots-fb-d). Don't "fix" it again.
+- **Probe lesson (banked in slot-rnd AGENT_MEMORY): a probe that measures the
+  innermost span under-reports block occlusion** — `_autisk-r3-block.mjs` is
+  the block-level ribbon measure of record; copying a defective probe inherits
+  its blind spot (codotty's fbe-settle3 clone repeated R2's mistake).
+- Landscape 852×393 receipt line reads "✓ VERIFIED · RECEIPT" (182px column);
+  portrait/desktop keep the full string (journey gates assert the literal).
+- `.impeccable/config.json` now carries shared Geist/Geist Mono waivers for
+  the overused-font detector (brand standard).
+Backlog uit deze sweep: 6px card type op 852×393 (cutscene-kolom structureel
+smal — layout-item, laag) · torn-lip asset heeft een rechte snijrand (art) ·
+zij-machine tekstflarden op 412 (smaak, artotty).
+
 Open items / Tim calls:
+0. **UI-richting**: 5 Higgsfield concept-boards staan klaar
+   (vending-run/shots-ui-concepts/: diegetic cabinet / scene-first minimal /
+   night alley / kiosk-receipt / collector case; advies = 1+4 combi, 3 voor de
+   backdrops). Wacht op Tims keuze.
 1. Desktop keypad sits below the 1280×800 fold (LED readout is in-fold;
    holding the keypad in-fold costs 25% cabinet). Discoverability call.
 2. Baked-art deltas across tiers (floor line 83.2/78.4/80.7% of image
