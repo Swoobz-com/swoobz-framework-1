@@ -1,6 +1,55 @@
 # HANDOFF — AUTOMAT (originals/vending) · for the next Fable 5 session
 
-**Status at handoff (2026-07-22 LATE evening, HEAD 598708a pushed): 3-machine
+## 🟩 SESSION 2026-08-31 — SINGLE-SCREEN PORTRAIT (HEAD 95d2198, pushed)
+
+Tim's ask: "op mobile moet je ver scrollen — Yurei heeft een all-fitting UI,
+bouw dat ook voor AUTOMAT." This SUPERSEDES the old §6 item 2 ("VEND below
+the fold is intentional"). Spec of record: `SPEC-PORTRAIT-0831.md` (in this
+folder). Built by codotty (2 fix rounds), TWO blind mobile-QA rounds, final
+verdict **ATTESTED FOR SHIP**, orchestrator-verified + committed `95d2198`.
+
+What shipped (VendingExperience.tsx only, +592/−203; money files
+triple-attested byte-identical c5fe160b/8609c589/79a41988):
+- Portrait = 4 bands in 100dvh, NO scroll (was docH 1407 = 1.5-1.7 screens):
+  top strip (AUTOMAT · BALANCE · CUTSCENE chip · ?) → full-bleed stage →
+  floating control zone (hero VEND, machine chips, one stepper row) → slim
+  money strip (TOTAL · MAX WIN · compliance line).
+- Shared "control atoms" (helpButton/machineChips/vendCta/steppers/…)
+  declared once, arranged per layout — portrait and desktop trees cannot
+  drift in handlers/aria/keyboard.
+- Slot-pick now gated on MEASURED canvas width: ResizeObserver on the
+  turntable box, `SLOT_PICK_MIN_CANVAS_PX = 337` (:184), live-tracking,
+  picks cleared on shrink. Observe the TURNTABLE box, not the canvas — a
+  rotated back machine's rotateY projection reads ~204px where the box is
+  275.7px.
+- Money strip height is MEASURED into `--vend-strip`; chrome budget is
+  `calc(300px + var(--vend-strip))` — never a hard-coded constant again.
+- ≤380px media block: topstrip compaction + stepper selects pad 0 10px 0 2px
+  + font 12px so the WIDEST ladder values (10.00 / 20) render unclipped.
+- The scrollIntoView portrait hack (old jesse fix) is REMOVED (dead code in
+  a non-scrolling layout).
+
+New learnings (20-22):
+20. **Verify at STRESSED viewports, not just reference ones** — build passed
+    412×915/390×844 and failed 360×740/412×738 (dvh shrunk by browser
+    chrome): slot cells 35.6px, help ? clipped off-viewport, strip overlap.
+    Always test 360×740 AND a dvh-shrunk 412×738.
+21. **A "fits" claim for a native <select> needs a SCREENSHOT of the WIDEST
+    value** — measureText said 39px fits a 50px box; Chrome still clipped
+    "10.00" (UA inner box < computed content box). Codotty first proved the
+    fix on the default value only; the ladder max still clipped.
+22. **Backticks inside a comment inside a JSX template-literal stylesheet
+    terminate the literal** — four TS errors from a pure comment edit.
+
+Evidence: `vending-run/shots-bv-0831/`, `shots-codotty-portrait/`,
+`shots-portrait-before/`, `shots-portrait-after/`. Probes `_qa-bv*.mjs`
+(blind QA, reusable regression suite), `_codotty-*` (maker). Landscape
+docH 618>393 page-scroll remains the ACCEPTED pre-existing landscape
+baseline (untouched).
+
+---
+
+**Status at prior handoff (2026-07-22 LATE evening, HEAD 598708a pushed): 3-machine
 build + OPTIONAL SLOT-PICK feature + per-machine pack skins, five-agent
 swoobz QA fleet run and all its findings closed, ON GITHUB, ~95%
 ship-ready.** Read `AGENTVENDING.md` FIRST (the short law card for any agent
