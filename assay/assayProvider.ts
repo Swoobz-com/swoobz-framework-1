@@ -420,6 +420,10 @@ export function useAssayController(): AssayController {
       ...cur,
       phase: { kind: 'settled', outcome },
       balanceLamports: cur.balanceLamports + payoutLamports,
+      // CHANGE A: a settled BUST collected nothing (bomb = whole-run void = 0),
+      // so the HAUL dial/tally must read 0 beside PAYOUT 0.00 — never a stale
+      // pre-bomb multiplier. A WIN keeps its tally showing the claimed value.
+      ...(won ? {} : { tallyBps: 0n, lastDeltaBps: 0n }),
       history: [
         {
           finalMultiplierBps: finalBps,
@@ -526,7 +530,21 @@ export function useAssayController(): AssayController {
       if (secrets.bombBitmap[tile] ?? false) {
         setState((cur) =>
           cur.phase.kind === 'assaying'
-            ? { ...cur, phase: { kind: 'bad-vein', veinTileIdx: tile } }
+            ? {
+                ...cur,
+                // FIX 2 (display-only, mirrors the INSTANT pace's isBust branch
+                // below): zero the LIVE HAUL readout — the tally NUMBER and the
+                // TallyDial NEEDLE both read s.tallyBps — in LOCKSTEP with the
+                // LINE BROKE flip, not BAD_VEIN_HOLD_MS (720ms) later at
+                // settle(). Otherwise the staggered bust-transition frame shows
+                // HAUL still reading the pre-bomb tally while the hero already
+                // says LINE BROKE 0.00 (a readable contradiction). tallyBps /
+                // lastDeltaBps are DISPLAY-ONLY — settle() derives payout from
+                // committedTrail, never from these — so this touches no math.
+                tallyBps: 0n,
+                lastDeltaBps: 0n,
+                phase: { kind: 'bad-vein', veinTileIdx: tile },
+              }
             : cur,
         )
         return 'vein'
@@ -565,15 +583,22 @@ export function useAssayController(): AssayController {
         safeTiles.push(tile)
       }
       const k = safeTiles.length
+      const isBust = vein !== null
       const flyBps = k === 0 ? 0n : k === 1 ? coinLadderBps(1, safe) : coinDeltaBps(k, safe)
-      if (k > 0) playBead(flyBps)
+      // CHANGE A: on an instant BUST the whole run is void (bomb = 0) — no
+      // collect SFX (playBead) and no tally value flash. The pre-bomb tiles
+      // still reveal on the board, but the tally holds 0 through the bad-vein
+      // hold and no coin flies to the HAUL meter (the reveal-watcher in
+      // AssayGridCanvas gates flies on phase 'assaying', which this same
+      // setState flips to 'bad-vein'). A WIN is unchanged: full tally + flies.
+      if (k > 0 && !isBust) playBead(flyBps)
       setState((cur) =>
         cur.phase.kind === 'assaying'
           ? {
               ...cur,
               revealedSafe: safeTiles,
-              tallyBps: k > 0 ? coinLadderBps(k, safe) : 0n,
-              lastDeltaBps: flyBps,
+              tallyBps: isBust ? 0n : k > 0 ? coinLadderBps(k, safe) : 0n,
+              lastDeltaBps: isBust ? 0n : flyBps,
               ...(vein !== null ? { phase: { kind: 'bad-vein', veinTileIdx: vein } as AssayPhase } : {}),
             }
           : cur,

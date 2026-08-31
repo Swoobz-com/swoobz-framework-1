@@ -24,7 +24,7 @@
  *
  * Domain C: presentation only. State + math live in vaultProvider + vaultMath.
  */
-import { type ReactElement, useEffect, useRef } from 'react'
+import { type ReactElement, useEffect, useRef, useState } from 'react'
 
 import {
   formatMultiplier,
@@ -330,6 +330,34 @@ export function VaultGridCanvas(
   const holdActiveRef = useRef(false)
   const holdTimerRef = useRef<number | null>(null)
 
+  // ── Keyboard operability (WCAG 2.1.1) ─────────────────────────────────────
+  // The grid is a SINGLE focusable region (this canvas element itself — see
+  // its own `tabIndex` in the returned JSX). Arrow keys move a cursor tile-
+  // to-tile (clamped at the edges); Enter/Space activates the cursor tile
+  // through the EXACT SAME `activateTile` function a pointer clean-tap uses
+  // below — no second reveal path, no auto-reveal, no key-repeat
+  // acceleration (RG-C5: one keypress is one activation, exactly one tap).
+  // `cursorIdx` is real React state (it drives `aria-activedescendant` +
+  // the accessible fallback-content labels below); `cursorIdxRef`/
+  // `gridFocusedRef` mirror it into refs the rAF draw loop can read without
+  // triggering a re-render every frame — same idiom as this file's own
+  // `propsRef`.
+  const [cursorIdx, setCursorIdx] = useState<number | null>(null)
+  const cursorIdxRef = useRef<number | null>(null)
+  const gridFocusedRef = useRef(false)
+  useEffect(() => {
+    cursorIdxRef.current = cursorIdx
+  }, [cursorIdx])
+  // Clamp (not reset) the cursor when the grid size changes (mode switch
+  // between the 5×5 and 7×7 worlds) so it never points past the new board.
+  useEffect(() => {
+    setCursorIdx((prev) => {
+      if (prev === null) return prev
+      const total = props.gridSize * props.gridSize
+      return prev >= total ? total - 1 : prev
+    })
+  }, [props.gridSize])
+
   useEffect(() => {
     // New safe reveal(s) → flip + per-tile delta float. All timings module
     // consts. Generalized (2026-07-02) from "always exactly one newest tile"
@@ -390,8 +418,8 @@ export function VaultGridCanvas(
     // MOON reveal flash (SHITCOIN). Fires once when the MOON tile is tapped.
     if (props.revealedMoonTileIdx !== null && props.revealedMoonTileIdx !== lastMoonRef.current) {
       moonFlashAtRef.current = performance.now()
-      // The jackpot deserves a chime — playCashOutWin was defined but never
-      // called. Fires once on the MOON reveal. Parameterless → RG-C5 safe.
+      // The MOON reveal deserves a chime -- playCashOutWin was defined but never
+      // called. Fires once on the MOON reveal. Parameterless -> RG-C5 safe.
       playCashOutWin()
     }
     lastMoonRef.current = props.revealedMoonTileIdx
@@ -405,6 +433,7 @@ export function VaultGridCanvas(
       lastMoonRef.current = null
       lastSafeRevealAtRef.current = 0
       moonFlashAtRef.current = 0
+      setCursorIdx(null) // fresh keyboard cursor for the new round
     }
   }, [phase])
 
@@ -554,7 +583,18 @@ export function VaultGridCanvas(
 
         const isRevealedSafe = revealedSet.has(i)
         const isMineHit = p.mineHitTileIdx === i
-        const isAfterMine = p.mineHitTileIdx !== null && !isMineHit && !isRevealedSafe
+        // BOARD-READS-AS-ONE-IMAGE fix (rugsui fix-spec §5, 2026-07-06) — this
+        // used to gate ONLY on `mineHitTileIdx !== null` (a loss), so on a WIN
+        // settlement (no mine ever struck) every untapped safe stayed at FULL
+        // strength — the exact "unopened safes at full strength" bug the
+        // spec flags. Dimming now keys off `phase === 'settled'` directly
+        // (true on BOTH win and loss), still excluding the struck mine
+        // (isMineHit keeps its own full-strength dramatic render) and any
+        // revealed/moon tile (those must stay full strength per spec). Name
+        // kept as `isAfterMine` — every downstream consumer (sheen/glow
+        // suppression, drawCoin's dim branch) already means "sealed + no
+        // longer live", which is exactly this.
+        const isAfterMine = p.phase === 'settled' && !isMineHit && !isRevealedSafe
         const isMoon = p.revealedMoonTileIdx === i
 
         const anim = tileAnimsRef.current.find((a) => a.idx === i)
@@ -651,6 +691,36 @@ export function VaultGridCanvas(
             ctx.stroke()
             ctx.restore()
           }
+        }
+
+        // ── KEYBOARD FOCUS RING — a static two-tone ring (dark halo + bright
+        //    inner line) on the cursor tile while the grid region has real
+        //    DOM focus (Tab-in). Drawn AFTER `drawCoin` (like the SAFE REVEAL
+        //    RING above it) so it sits ON TOP of the tile's opaque sprite
+        //    instead of being painted over and hidden by it. Two tones so
+        //    the ring clears 3:1 contrast against ANY tile content (dark
+        //    ground, bright coin, gold bag) instead of only one background
+        //    family. Fixed geometry/alpha — no time input at all, so there
+        //    is nothing for reducedMotion to reduce (RG-C5: this is not an
+        //    animation, it is a static marker of which tile the keyboard
+        //    cursor is on).
+        if (gridFocusedRef.current && cursorIdxRef.current === i) {
+          ctx.save()
+          roundedRect(
+            ctx,
+            x + grid.tile * 0.035,
+            y + grid.tile * 0.035,
+            grid.tile * 0.93,
+            grid.tile * 0.93,
+            grid.tile * 0.18,
+          )
+          ctx.strokeStyle = 'rgba(5,6,10,0.92)'
+          ctx.lineWidth = Math.max(5, grid.tile * 0.09)
+          ctx.stroke()
+          ctx.strokeStyle = '#FFFFFF'
+          ctx.lineWidth = Math.max(2.5, grid.tile * 0.045)
+          ctx.stroke()
+          ctx.restore()
         }
 
         // Idle sheen — a soft highlight band sweeps diagonally across the
@@ -837,6 +907,23 @@ export function VaultGridCanvas(
     propsRef.current.onTilePaint(idx)
   }
 
+  // Single source of truth for "a clean tap" outcome — MANUAL mode reveals,
+  // TRAIL mode toggles the tile on the path. Used by BOTH the pointer clean-
+  // tap paths below AND the keyboard Enter/Space handler, so there is
+  // exactly one activation code path regardless of input device (no
+  // duplicated reveal logic, no keyboard-only behaviour). Same `phase !==
+  // 'playing'` guard `tileIdxFromEvent` already applies to pointer input.
+  const activateTile = (idx: number): void => {
+    const p = propsRef.current
+    if (p.phase !== 'playing') return
+    if (idx < 0 || idx >= p.gridSize * p.gridSize) return
+    if (!p.trailMode) {
+      p.onTileReveal(idx)
+    } else {
+      p.onTileTrail(idx)
+    }
+  }
+
   const HOLD_MS = 220
   const DRAG_THRESHOLD_PX = 10
 
@@ -848,7 +935,7 @@ export function VaultGridCanvas(
     if (!propsRef.current.reducedMotion) pressRef.current = { idx, at: performance.now() }
     // MANUAL (classic Mines): a tap reveals immediately — no gesture at all.
     if (!propsRef.current.trailMode) {
-      propsRef.current.onTileReveal(idx)
+      activateTile(idx)
       return
     }
     // TRAIL: hold/drag paints a path; a clean tap toggles a tile.
@@ -892,7 +979,7 @@ export function VaultGridCanvas(
     if (wasGesture || idx === null) return // paint already happened
     // Clean TAP in TRAIL mode → toggle the tile on/off the path. (MANUAL taps
     // never reach here — they reveal on pointer-down.)
-    propsRef.current.onTileTrail(idx)
+    activateTile(idx)
   }
   const cancelDrag = (): void => {
     if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current)
@@ -901,15 +988,115 @@ export function VaultGridCanvas(
     hoverIdxRef.current = null // drop the selection glow when the pointer leaves
   }
 
+  // Arrow-key cursor movement — CLAMPS at the grid edges rather than
+  // wrapping (the less-surprising choice: you can't "wrap" off the board
+  // with a tap either, so the keyboard cursor shouldn't seem to teleport).
+  const moveCursor = (deltaRow: number, deltaCol: number): void => {
+    const gridSize = propsRef.current.gridSize
+    const current = cursorIdxRef.current ?? 0
+    const row = Math.floor(current / gridSize)
+    const col = current % gridSize
+    const nextRow = Math.min(gridSize - 1, Math.max(0, row + deltaRow))
+    const nextCol = Math.min(gridSize - 1, Math.max(0, col + deltaCol))
+    setCursorIdx(nextRow * gridSize + nextCol)
+  }
+
+  const handleGridKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>): void => {
+    switch (e.key) {
+      case 'ArrowUp':
+        e.preventDefault()
+        moveCursor(-1, 0)
+        break
+      case 'ArrowDown':
+        e.preventDefault()
+        moveCursor(1, 0)
+        break
+      case 'ArrowLeft':
+        e.preventDefault()
+        moveCursor(0, -1)
+        break
+      case 'ArrowRight':
+        e.preventDefault()
+        moveCursor(0, 1)
+        break
+      case 'Enter':
+      case ' ':
+      case 'Spacebar': // legacy IE/Edge key name, kept defensively
+        // Enter/Space activate the cursor tile through the SAME
+        // `activateTile` a pointer clean-tap calls above — no auto-reveal,
+        // no key-repeat acceleration: one keypress is one activation,
+        // exactly like one tap (RG-C5 intact).
+        e.preventDefault()
+        activateTile(cursorIdxRef.current ?? 0)
+        break
+      default:
+        break
+    }
+  }
+
+  const handleGridFocus = (): void => {
+    gridFocusedRef.current = true
+    if (cursorIdxRef.current === null) setCursorIdx(0)
+  }
+
+  const handleGridBlur = (): void => {
+    gridFocusedRef.current = false
+  }
+
+  // Accessible name per tile for the canvas's fallback-content gridcells,
+  // read via `aria-activedescendant` — NOT visually rendered (the canvas
+  // paints over them; this is the documented WAI canvas "fallback content"
+  // accessibility technique). Describes the SAME state the canvas already
+  // reads (revealedTiles / mineHitTileIdx / revealedMoonTileIdx / phase) —
+  // no new state, just a text description of it.
+  const tileAccessibleName = (idx: number): string => {
+    const row = Math.floor(idx / props.gridSize) + 1
+    const col = (idx % props.gridSize) + 1
+    let status: string
+    if (props.mineHitTileIdx === idx) status = 'rug pull'
+    else if (props.revealedMoonTileIdx === idx) status = 'moon payout revealed'
+    else if (props.revealedTiles.includes(idx)) status = 'revealed, safe'
+    else if (props.phase === 'settled') status = 'sealed, round over'
+    else status = 'hidden'
+    return `Tile ${col}, row ${row}, ${status}`
+  }
+
+  const accessibleRows: ReactElement[] = []
+  for (let r = 0; r < props.gridSize; r++) {
+    const cells: ReactElement[] = []
+    for (let c = 0; c < props.gridSize; c++) {
+      const idx = r * props.gridSize + c
+      cells.push(<div key={idx} id={`vault-tile-${idx}`} role="gridcell" aria-label={tileAccessibleName(idx)} />)
+    }
+    accessibleRows.push(
+      <div key={r} role="row">
+        {cells}
+      </div>,
+    )
+  }
+
   return (
     <canvas
       ref={canvasRef}
+      role="grid"
+      aria-label={
+        phase === 'playing'
+          ? `RUG OR RICHES coin grid, ${props.gridSize} by ${props.gridSize}. Tap to open, hold and drag to plan a trail. Keyboard: arrow keys move the cursor, Enter or Space opens the selected tile.`
+          : 'RUG OR RICHES grid'
+      }
+      aria-rowcount={props.gridSize}
+      aria-colcount={props.gridSize}
+      aria-activedescendant={cursorIdx !== null ? `vault-tile-${cursorIdx}` : undefined}
+      tabIndex={0}
+      data-testid="vault-grid-canvas"
+      onFocus={handleGridFocus}
+      onBlur={handleGridBlur}
+      onKeyDown={handleGridKeyDown}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerLeave={cancelDrag}
       onPointerCancel={cancelDrag}
-      aria-label={phase === 'playing' ? 'Coin grid — tap to open, hold and drag to plan a trail' : 'RUG OR RICHES grid'}
       style={{
         position: 'relative',
         zIndex: 1,
@@ -920,8 +1107,15 @@ export function VaultGridCanvas(
         cursor: phase === 'playing' ? 'pointer' : 'default',
         // 'none' so a touch DRAG paints a trail instead of scrolling the page.
         touchAction: 'none',
+        // The visible focus indicator is drawn ON the cursor tile INSIDE the
+        // canvas itself (see the "KEYBOARD FOCUS RING" block in the rAF
+        // frame loop above) — a plain browser outline around the whole
+        // canvas element couldn't show WHICH tile has the keyboard cursor.
+        outline: 'none',
       }}
-    />
+    >
+      {accessibleRows}
+    </canvas>
   )
 }
 
@@ -1251,6 +1445,14 @@ function drawTerminalPanel(
   gridFull: number,
   pal: ModePalette,
 ): void {
+  // NOTE: pad stays `Math.max(14, gridFull*0.045)` (≈24.5px at the fixed
+  // 544px board) — the rugsui fix-spec's mockup literal ("14px padding") is
+  // authored against that mockup's own 1.6x-zoomed 50px-tile reference frame;
+  // translated to this board's real 96px tiles (50->96 ≈ 1.92x) the mockup's
+  // 14px maps to ~27px, i.e. this existing formula already tracks the spec
+  // at vault's actual scale. Left untouched deliberately — 592 (=544+24×2)
+  // is a taste-locked, widely cross-referenced plate width elsewhere in this
+  // file/VaultExperience.tsx; changing the pad would silently drift it.
   const pad = Math.max(14, gridFull * 0.045)
   const px = gridX - pad
   const py = gridY - pad
@@ -1258,17 +1460,26 @@ function drawTerminalPanel(
   const ph = gridFull + pad * 2
   const radius = Math.max(12, gridFull * 0.03)
 
-  // Embedded recess for the grid — NO borders, NO colored rule. A soft dark
-  // translucent backing grounded by a drop shadow + a faint top sheen, so the
-  // coins read as sitting INSIDE the scene rather than on an outlined card.
+  // BOARD-PLATE STRENGTHEN (rugsui fix-spec §5, 2026-07-06) — the previous
+  // 0.5/0.62-alpha translucent recess read as "too weak" once the full-bleed
+  // per-world backdrop went in behind it (same root cause as the DOM
+  // control-column GLASS->VAULT-PLATE opacity fix earlier today): the art
+  // showed straight through and the grid stopped reading as one seated
+  // instrument. FULLY OPAQUE now, reusing the EXACT VAULT_PLATE_FILL hex
+  // stops from VaultExperience.tsx (`#1B2330` -> `#090F18`, same 180deg
+  // direction) so the canvas-drawn board plate is the same material as
+  // every DOM control-column card — one plate token across the whole shell,
+  // not two competing near-blacks. A `VAULT_PLATE_BORDER`-equivalent gold
+  // hairline (rgba(255,197,61,0.26)) replaces the old "NO borders" rule —
+  // spec explicitly wants a border here now.
   void pal
   ctx.save()
   ctx.shadowColor = 'rgba(0,0,0,0.5)'
   ctx.shadowBlur = 34
   ctx.shadowOffsetY = 12
   const fg = ctx.createLinearGradient(0, py, 0, py + ph)
-  fg.addColorStop(0, 'rgba(14,18,25,0.5)')
-  fg.addColorStop(1, 'rgba(8,11,16,0.62)')
+  fg.addColorStop(0, '#1B2330')
+  fg.addColorStop(1, '#090F18')
   ctx.fillStyle = fg
   roundedRect(ctx, px, py, pw, ph, radius)
   ctx.fill()
@@ -1280,10 +1491,18 @@ function drawTerminalPanel(
   roundedRect(ctx, px, py, pw, ph, radius)
   ctx.clip()
   const sheen = ctx.createLinearGradient(0, py, 0, py + ph * 0.4)
-  sheen.addColorStop(0, 'rgba(255,255,255,0.05)')
+  sheen.addColorStop(0, 'rgba(255,255,255,0.07)')
   sheen.addColorStop(1, 'rgba(255,255,255,0)')
   ctx.fillStyle = sheen
   ctx.fillRect(px, py, pw, ph * 0.4)
+  ctx.restore()
+
+  // Gold hairline — same 0.26 alpha as `VAULT_PLATE_BORDER`.
+  ctx.save()
+  ctx.lineWidth = 1
+  ctx.strokeStyle = 'rgba(255,197,61,0.26)'
+  roundedRect(ctx, px + 0.5, py + 0.5, pw - 1, ph - 1, radius)
+  ctx.stroke()
   ctx.restore()
 }
 
@@ -1396,17 +1615,45 @@ function drawCoin(ctx: CanvasRenderingContext2D, a: DrawCoinArgs): void {
       ctx.strokeStyle = `rgba(${pal.pumpRgb},${0.6 + 0.3 * eased})`
       ctx.stroke()
     }
-    // Faint reveal-order number bottom-corner (the trace).
+    // Reveal-order number, bottom-right corner (the trace). FIX 2 ROUND 2
+    // (2026-07-07, consolidated fix pass): the round-1 stroke-only numeral
+    // sat at cy+0.3*size — directly over the coin-pump.png sprite's own
+    // black-outlined up-arrow base / the coin's black corrugated rim — and
+    // measured 1.2-3.1:1 there depending on whether the underlying pixel was
+    // the sprite's bright-green fill or its black ink, because a text
+    // STROKE only outlines the glyph, it doesn't guarantee a uniform
+    // backing color. Fix: (1) move the numeral off-center into the coin's
+    // bottom-RIGHT quadrant, clear of the centered arrow glyph, and (2)
+    // back it with a SOLID filled dark plate (not just a stroke) so
+    // contrast is guaranteed regardless of what art sits underneath in any
+    // of the 3 worlds or the 5x5/7x7 grid sizes.
     if (revealNumber !== undefined) {
-      ctx.fillStyle = `rgba(255,255,255,${0.55 * eased})`
-      ctx.font = `700 ${Math.max(8, size * 0.14)}px ${FONT_MONO}`
+      const numeralText = String(revealNumber)
+      const fontSize = Math.max(8, size * 0.14)
+      ctx.font = `700 ${fontSize}px ${FONT_MONO}`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(String(revealNumber), cx, cy + size * 0.3)
+      const numeralX = cx + size * 0.26
+      const numeralY = cy + size * 0.26
+      const metrics = ctx.measureText(numeralText)
+      const plateR = Math.max(fontSize * 0.62, metrics.width / 2 + fontSize * 0.22)
+      ctx.beginPath()
+      ctx.arc(numeralX, numeralY, plateR, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(6,20,14,${0.92 * eased})`
+      ctx.fill()
+      ctx.fillStyle = `rgba(255,255,255,${0.98 * eased})`
+      ctx.fillText(numeralText, numeralX, numeralY)
     }
   } else if (isAfterMine) {
-    // Dimmed sealed compartment — the player never cracked this one. RG-C3.
-    ctx.globalAlpha = 0.32
+    // Dimmed sealed compartment — the player never cracked this one. RG-C3
+    // (count-only counterfactual, never a per-tile reveal). Opacity raised
+    // 0.32 -> 0.45 (rugsui fix-spec §5's exact value) — this branch now also
+    // fires on a WIN settlement (see `isAfterMine`'s definition above), so
+    // the value is doing double duty across both outcomes; `ctx.save()`/
+    // `restore()` in `drawCoin`'s outer wrapper scopes `globalAlpha` to only
+    // this one tile's draw call, so it never compounds onto a sibling
+    // revealed-safe tile's full-strength coin + pick-order number.
+    ctx.globalAlpha = 0.45
     const sprite = getImage(TILE_LOCKBOX)
     if (sprite) drawTileSprite(ctx, sprite, cx, cy, size, 0.98)
     else drawCoinFace(ctx, cx, cy, r, size, pal, true)
@@ -1741,19 +1988,17 @@ function drawBottomHint(
   let text = ''
   let color = 'rgba(255,255,255,0.80)' // raised from 0.62 — was hard to read (autisk/user)
   const trailLen = p.trail?.length ?? 0
-  // Narrow/mobile SETTLED-only suppression: the near-board VaultBoardRebet
-  // CTA plate (VaultExperience.tsx boardRebetWrapMobile, bottom:6px) sits
-  // directly over this fixed-pixel caption on mobile during the settled
-  // phase. On WIN the caption "SECURED THE BAG · {mult}" is longer than the
-  // plate, so its ends bled out both sides of it ("SEC" / "53x" fragments —
-  // taste-guardian ship-gate, 2026-07-02). Both settled captions here are
-  // 100% duplicate of the larger VaultHeroOverlay headline one region above
-  // (the already-accepted near-board CTA trade-off), so the clean fix is to
-  // suppress them on mobile rather than half-occlude one of them. Desktop
-  // (isWide) is unaffected — the desktop ledge sits at bottom:72px with real
-  // clearance, so both captions stay exactly as before there. `mine-hit` is
-  // a separate, pre-settled phase (the CTA only ever renders once
-  // `phase.kind === 'settled'`), so its own RUGGED caption is untouched.
+  // Narrow/mobile SETTLED-only suppression: this canvas-drawn text ("SECURED
+  // THE BAG · {mult}" / "RUGGED") is 100% duplicate of the larger
+  // VaultHeroOverlay headline one region above it, AND (as of the rugsui
+  // fix-spec §5 rebuild, 2026-07-06) duplicate of the new DOM
+  // `SettledBoardCaption` pill strip that now owns this exact job on both
+  // mobile and desktop. Originally suppressed on mobile only because of the
+  // now-REMOVED near-board `VaultBoardRebet` CTA plate overlapping it
+  // (taste-guardian ship-gate, 2026-07-02) — that plate is gone, but the
+  // suppression stays correct for the NEW reason (DOM caption ownership), so
+  // the condition is unchanged. Desktop was already skipped entirely
+  // (`!p.domHudActive` gate above this function's call site).
   const suppressSettledCaption = p.phase === 'settled' && p.isWide === false
   if (p.phase === 'playing' && p.trailMode && trailLen === 0) {
     // TRAIL mode, nothing painted yet — must NOT say "tap a coin" (jesse fix).

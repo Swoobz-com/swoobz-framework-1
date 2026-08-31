@@ -1,0 +1,277 @@
+/**
+ * AUTOMAT — RONIN ZERO fighter-pack machine (machine #4 on the turntable).
+ *
+ * COSMETIC MACHINE, by Tim's explicit decision (2026-07-20): packs cost demo
+ * balance ($5/$10/$25/$50 per pack) and pay FIGHTER CARDS, never money. There
+ * is NO payout path in this file — no RTP surface — so unlike vendingMath the
+ * knob that scales with price is the RARITY ODDS (higher price = better odds
+ * for the top tiers). The odds below are the REAL draw weights and are
+ * rendered verbatim in the UI (the disclosure IS the data).
+ *
+ * Fairness structure mirrors vendingMath/vendingProvider anyway: integer
+ * weights over WEIGHT_TOTAL = 100 000, seed-committed derivation in
+ * roninProvider (domain tags RONINPACK/RONINCHAR), and a load-time
+ * mirror check that throws on any drift.
+ *
+ * Roster: Tim's "NOT FINAL MKOMBAT" set (56 fighters, /skin/roster/<id>.webp)
+ * + RONIN ZERO himself (crest card until his art lands). Tier split per Tim's
+ * rule: normal humans low (common/uncommon), monsters high, MYTHICAL = the
+ * red takeover class.
+ */
+import { WEIGHT_TOTAL } from './vendingMath'
+import type { VendingTierId } from './vendingMath'
+
+/** The four machines on the turntable: the three money tiers + RONIN ZERO. */
+export type MachineId = VendingTierId | 'ronin'
+export const RONIN_MACHINE_ID = 'ronin' as const
+
+// ─── Rarity ladder ──────────────────────────────────────────────────────────
+
+export type RoninRarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythical'
+export const RARITY_ORDER: readonly RoninRarity[] = [
+  'common',
+  'uncommon',
+  'rare',
+  'epic',
+  'legendary',
+  'mythical',
+]
+export const RARITY_RANK: Readonly<Record<RoninRarity, number>> = {
+  common: 0,
+  uncommon: 1,
+  rare: 2,
+  epic: 3,
+  legendary: 4,
+  mythical: 5,
+}
+/** Rarity color language (content colors, rarity-keyed — mythical is THE red
+ *  Ronin Zero takeover; identical presentation for every mythical card). */
+export const RARITY_STYLE: Readonly<
+  Record<RoninRarity, { label: string; color: string; ray: string; rayAlpha: number }>
+> = {
+  common: { label: 'COMMON', color: '#9aa3ad', ray: '154,163,173', rayAlpha: 0 },
+  uncommon: { label: 'UNCOMMON', color: '#4ade80', ray: '74,222,128', rayAlpha: 0.2 },
+  rare: { label: 'RARE', color: '#38bdf8', ray: '56,189,248', rayAlpha: 0.32 },
+  epic: { label: 'EPIC', color: '#a78bfa', ray: '167,139,250', rayAlpha: 0.46 },
+  legendary: { label: 'LEGENDARY', color: '#f0a13c', ray: '240,161,60', rayAlpha: 0.6 },
+  mythical: { label: 'MYTHICAL', color: '#e5484d', ray: '229,72,77', rayAlpha: 0.78 },
+}
+
+// ─── Price points (fixed ladder — the odds knob) ────────────────────────────
+
+export interface RoninPricePoint {
+  /** Stable id — the fairness domain tag keys off this, never the label. */
+  readonly id: string
+  readonly lamports: bigint
+  readonly label: string
+  readonly headline: string
+  /** REAL draw weights per rarity, Σ === WEIGHT_TOTAL (100 000). */
+  readonly odds: Readonly<Record<RoninRarity, bigint>>
+}
+
+export const RONIN_PRICES: readonly RoninPricePoint[] = [
+  {
+    id: 'p5',
+    lamports: 5_000_000n,
+    label: '5.00',
+    headline: 'the road pack',
+    odds: { common: 55_000n, uncommon: 30_000n, rare: 11_000n, epic: 3_000n, legendary: 900n, mythical: 100n },
+  },
+  {
+    id: 'p10',
+    lamports: 10_000_000n,
+    label: '10.00',
+    headline: 'better RARE odds',
+    odds: { common: 40_000n, uncommon: 32_000n, rare: 18_000n, epic: 7_000n, legendary: 2_600n, mythical: 400n },
+  },
+  {
+    id: 'p25',
+    lamports: 25_000_000n,
+    label: '25.00',
+    headline: 'strong EPIC odds',
+    odds: { common: 24_000n, uncommon: 30_000n, rare: 25_000n, epic: 14_000n, legendary: 5_500n, mythical: 1_500n },
+  },
+  {
+    id: 'p50',
+    lamports: 50_000_000n,
+    label: '50.00',
+    headline: 'best MYTHICAL odds',
+    odds: { common: 12_000n, uncommon: 20_000n, rare: 28_000n, epic: 22_000n, legendary: 13_000n, mythical: 5_000n },
+  },
+]
+
+/** Format a rarity weight as a percent string ("13%", "0.1%"). Display only. */
+export function oddsPercent(weight: bigint): string {
+  const whole = weight / 1_000n
+  const tenth = (weight % 1_000n) / 100n
+  return tenth === 0n ? `${whole}%` : `${whole}.${tenth}%`
+}
+
+// ─── The roster ─────────────────────────────────────────────────────────────
+
+export interface RoninFighter {
+  /** Stable id; art lives at /skin/roster/<id>.webp (null art = crest card). */
+  readonly id: string
+  readonly name: string
+  readonly rarity: RoninRarity
+  readonly art: string | null
+}
+
+function F(id: string, name: string, rarity: RoninRarity): RoninFighter {
+  return { id, name, rarity, art: `/skin/roster/${id}.webp` }
+}
+
+export const RONIN_ROSTER: readonly RoninFighter[] = [
+  // COMMON — rank-and-file humans (18)
+  F('brigitte-flail', 'Brigitte Flail', 'common'),
+  F('daigo-tetsubo', 'Daigo Tetsubo', 'common'),
+  F('edric-glaive', 'Edric Glaive', 'common'),
+  F('elowen-spear', 'Elowen Spear', 'common'),
+  F('haru-jutte', 'Haru Jutte', 'common'),
+  F('jin-kama', 'Jin Kama', 'common'),
+  F('kaito-kusarigama', 'Kaito Kusarigama', 'common'),
+  F('kengo-tonfa', 'Kengo Tonfa', 'common'),
+  F('malric-dagger', 'Malric Dagger', 'common'),
+  F('masaru-bo', 'Masaru Bo', 'common'),
+  F('rin-tonfa', 'Rin Tonfa', 'common'),
+  F('ryu-kanabo', 'Ryu Kanabo', 'common'),
+  F('shin-naginata', 'Shin Naginata', 'common'),
+  F('sora-yari', 'Sora Yari', 'common'),
+  F('theobald-spear', 'Theobald Spear', 'common'),
+  F('toru-sai', 'Toru Sai', 'common'),
+  F('yori-tanto', 'Yori Tanto', 'common'),
+  F('yuki-kama', 'Yuki Kama', 'common'),
+  // UNCOMMON — seasoned humans (14)
+  F('bjorn-waraxe', 'Bjorn Waraxe', 'uncommon'),
+  F('cedric-flailmark', 'Cedric Flailmark', 'uncommon'),
+  F('freya-waraxe', 'Freya Waraxe', 'uncommon'),
+  F('garrick-ironmace', 'Garrick Ironmace', 'uncommon'),
+  F('godric-halberd', 'Godric Halberd', 'uncommon'),
+  F('hana-katana', 'Hana Katana', 'uncommon'),
+  F('hector-warhammer', 'Hector Warhammer', 'uncommon'),
+  F('isolde-longsword', 'Isolde Longsword', 'uncommon'),
+  F('lucius-falchion', 'Lucius Falchion', 'uncommon'),
+  F('mireille-glaive', 'Mireille Glaive', 'uncommon'),
+  F('osric-pollaxe', 'Osric Pollaxe', 'uncommon'),
+  F('ren-bisento', 'Ren Bisento', 'uncommon'),
+  F('roland-claymore', 'Roland Claymore', 'uncommon'),
+  F('satoshi-odachi', 'Satoshi Odachi', 'uncommon'),
+  // RARE — named elites + the restless dead (9)
+  F('sir-aldric-thorn', 'Sir Aldric Thorn', 'rare'),
+  F('kenji-ashblade', 'Kenji Ashblade', 'rare'),
+  F('takeshi-stormyari', 'Takeshi Stormyari', 'rare'),
+  F('hiroto-dualwake', 'Hiroto Dualwake', 'rare'),
+  F('kappa-bo', 'Kappa Bo', 'rare'),
+  F('skeleton-nodachi', 'Skeleton Nodachi', 'rare'),
+  F('ghast-flail', 'Ghast Flail', 'rare'),
+  F('wight-spear', 'Wight Spear', 'rare'),
+  F('yokai-kama', 'Yokai Kama', 'rare'),
+  // EPIC — beasts and constructs (7)
+  F('minotaur-axe', 'Minotaur Axe', 'epic'),
+  F('golem-mace', 'Golem Mace', 'epic'),
+  F('gargoyle-spear', 'Gargoyle Spear', 'epic'),
+  F('troll-hammer', 'Troll Hammer', 'epic'),
+  F('kitsune-tanto', 'Kitsune Tanto', 'epic'),
+  F('nekomata-kama', 'Nekomata Kama', 'epic'),
+  F('nurikabe-shield', 'Nurikabe Shield', 'epic'),
+  // LEGENDARY — oni-class yokai (5)
+  F('oni-tetsubo', 'Oni Tetsubo', 'legendary'),
+  F('tengu-naginata', 'Tengu Naginata', 'legendary'),
+  F('raiju-naginata', 'Raiju Naginata', 'legendary'),
+  F('jorogumo-kusarigama', 'Jorogumo Kusarigama', 'legendary'),
+  F('drake-glaive', 'Drake Glaive', 'legendary'),
+  // MYTHICAL — the great horrors + the season boss (4)
+  F('lich-scythe', 'Lich Scythe', 'mythical'),
+  F('hydra-flail', 'Hydra Flail', 'mythical'),
+  F('onryo-katana', 'Onryo Katana', 'mythical'),
+  { id: 'roninzero', name: 'RONIN ZERO', rarity: 'mythical', art: null },
+]
+
+const ROSTER_BY_RARITY: Readonly<Record<RoninRarity, readonly RoninFighter[]>> = {
+  common: RONIN_ROSTER.filter((f) => f.rarity === 'common'),
+  uncommon: RONIN_ROSTER.filter((f) => f.rarity === 'uncommon'),
+  rare: RONIN_ROSTER.filter((f) => f.rarity === 'rare'),
+  epic: RONIN_ROSTER.filter((f) => f.rarity === 'epic'),
+  legendary: RONIN_ROSTER.filter((f) => f.rarity === 'legendary'),
+  mythical: RONIN_ROSTER.filter((f) => f.rarity === 'mythical'),
+}
+
+export function rosterByRarity(rarity: RoninRarity): readonly RoninFighter[] {
+  return ROSTER_BY_RARITY[rarity]
+}
+
+// ─── Roll → rarity → fighter (receipt re-derives through these) ─────────────
+
+/**
+ * Map a uniform roll ∈ [0, WEIGHT_TOTAL) onto the price point's rarity table
+ * by cumulative walk, RAREST-FIRST (the small slices sit at the front of the
+ * line, mirroring the gold-slice-last convention read the other way).
+ *
+ * @throws on out-of-range roll. Fail-closed.
+ */
+export function rollToRarity(roll: bigint, priceId: string): RoninRarity {
+  const price = RONIN_PRICES.find((p) => p.id === priceId)
+  if (!price) throw new Error(`ronin: unknown price point ${priceId}`)
+  if (roll < 0n || roll >= WEIGHT_TOTAL) {
+    throw new Error(`ronin: roll ${roll} out of band [0, ${WEIGHT_TOTAL})`)
+  }
+  let cum = 0n
+  for (let i = RARITY_ORDER.length - 1; i >= 0; i--) {
+    const rarity = RARITY_ORDER[i]!
+    cum += price.odds[rarity]
+    if (roll < cum) return rarity
+  }
+  throw new Error('ronin: rarity table walk fell through')
+}
+
+/** Map a uniform character roll onto the rarity's pool (index mod pool). The
+ *  provider derives charRoll uniformly over the POOL SIZE (rejection-sampled),
+ *  so this is a direct index. */
+export function charAt(rarity: RoninRarity, index: number): RoninFighter {
+  const pool = ROSTER_BY_RARITY[rarity]
+  const f = pool[index]
+  if (!f) throw new Error(`ronin: char index ${index} out of pool ${rarity} (${pool.length})`)
+  return f
+}
+
+// ─── Load-time mirror check (drift gate, mirrors vendingMath) ───────────────
+
+function roninMirrorCheck(): void {
+  // (a) every price point's odds sum EXACTLY to WEIGHT_TOTAL.
+  for (const p of RONIN_PRICES) {
+    let sum = 0n
+    for (const r of RARITY_ORDER) sum += p.odds[r]
+    if (sum !== WEIGHT_TOTAL) {
+      throw new Error(`ronin odds drift (${p.id}): Σ weights ${sum} ≠ ${WEIGHT_TOTAL}`)
+    }
+  }
+  // (b) prices strictly ascend and top-tier odds strictly improve with price
+  //     (the "higher price = better odds" promise, asserted).
+  for (let i = 1; i < RONIN_PRICES.length; i++) {
+    const lo = RONIN_PRICES[i - 1]!
+    const hi = RONIN_PRICES[i]!
+    if (hi.lamports <= lo.lamports) throw new Error('ronin drift: price ladder not ascending')
+    if (hi.odds.mythical <= lo.odds.mythical || hi.odds.legendary <= lo.odds.legendary) {
+      throw new Error('ronin drift: top-tier odds do not improve with price')
+    }
+  }
+  // (c) roster ids unique; every rarity pool non-empty.
+  const seen = new Set<string>()
+  for (const f of RONIN_ROSTER) {
+    if (seen.has(f.id)) throw new Error(`ronin drift: duplicate roster id ${f.id}`)
+    seen.add(f.id)
+  }
+  for (const r of RARITY_ORDER) {
+    if (ROSTER_BY_RARITY[r].length === 0) throw new Error(`ronin drift: empty pool ${r}`)
+  }
+  // (d) boundary spot-checks on the cheapest and richest points.
+  if (rollToRarity(0n, 'p50') !== 'mythical') throw new Error('ronin drift: p50 roll 0 ≠ mythical')
+  if (rollToRarity(WEIGHT_TOTAL - 1n, 'p5') !== 'common') {
+    throw new Error('ronin drift: p5 last roll ≠ common')
+  }
+  if (rollToRarity(99n, 'p5') !== 'mythical' || rollToRarity(100n, 'p5') !== 'legendary') {
+    throw new Error('ronin drift: p5 mythical slice boundary moved')
+  }
+}
+
+roninMirrorCheck()

@@ -232,6 +232,25 @@ const VAULT_PLATE_SHADOW =
 // radius/shadow any other plate uses (only THIS one row's fill deviates).
 const RUGS_TUNER_FILL = '#060A11'
 
+// SCENE EDGE-SCRIM (rugsui fix-spec §1, 2026-07-06) — the shell-wide
+// `sceneBackdropLayer` photo wash (see below) is a UNIFORM per-world alpha
+// over the whole art; once panels went full-bleed transparent-over-art there
+// was nothing guaranteeing contrast specifically under the busy edges (gold
+// bars, coin piles) where the control column + topbar/statusbar text sit.
+// This is a SECOND, edge-focused layer painted on top of that wash: darkens
+// the left edge + the control-column side + both horizontal edges while
+// leaving the 18-60% MIDDLE band clear so the board keeps full art contrast
+// (spec: "the board owns the light"). Values map 1:1 to the fix-spec's
+// literal stops/alphas — only the near-black hex is swapped for the
+// existing vault dark-canvas token (`T.bgCanvas` #03070d, already the base
+// of every other scrim wash in this file) instead of the mockup's raw
+// rgba(12,17,14,*), per the "reuse the existing brand near-black" rule.
+const VAULT_SCRIM_EDGE_H =
+  'linear-gradient(90deg, rgba(3,7,13,0.55) 0%, rgba(3,7,13,0) 18%, rgba(3,7,13,0) 60%, rgba(3,7,13,0.88) 78%, rgba(3,7,13,0.95) 100%)'
+// Bottom fade (70px tall) — guarantees contrast under the statusbar zone.
+// `T.bgCanvas`-based, transparent -> 90% per spec.
+const VAULT_SCRIM_BOTTOM = 'linear-gradient(180deg, rgba(3,7,13,0), rgba(3,7,13,0.9))'
+
 // GLASS — every gutter card (`gutterCard`/`gutterCardCta` build from this),
 // the BetEntry "HOW IT WORKS" chip, etc. Opaque VAULT-PLATE fill, no blur.
 const GLASS = {
@@ -480,12 +499,15 @@ export function VaultExperience(): ReactElement {
   // ── Rhythm tracking (perfect-tumbler visual celebration) ─────────────────
   // RG-C5 STRUCTURAL: rhythm state is PURELY COSMETIC. The on-chain math
   // (cumulativeMultiplierBps) is unchanged. The rhythm badge surfaces only
-  // when the player taps in tempo AND the cumulative bps clears the band
-  // gate in `vaultCopy.evaluateRhythmTick`. Inputs are timestamps + an
-  // economic value (cumulative bps); no streak length, no session-rounds,
-  // no per-tile escalation by index. The 1.05-1.15× campaign band maps to
-  // the cumulative bucket where 'rhythm' vs 'perfect' tier shifts; the
-  // math itself never ramps with rhythm.
+  // when the player taps in tempo AND the cumulative bps clears the
+  // economic-stake floor in `vaultCopy.evaluateRhythmTick`. Inputs are
+  // timestamps + an economic value (cumulative bps); no session-rounds, no
+  // per-tile escalation by index. The 'rhythm' vs 'perfect' tier is decided
+  // purely by the within-round in-rhythm CHAIN LENGTH (chain 3-4 = 'rhythm',
+  // chain >= 5 = 'perfect'); the cumulative multiplier value only gates
+  // whether any badge shows at all (RHYTHM_MIN_CUMULATIVE_BPS floor), it no
+  // longer selects the tier. Chain resets to 1 every round; the math itself
+  // never ramps with rhythm.
   const lastSafeRevealAtRef = useRef<number>(0)
   const rhythmChainRef = useRef<number>(0)
   const lastRevealedCountRef = useRef<number>(0)
@@ -601,11 +623,13 @@ export function VaultExperience(): ReactElement {
   const sessionRounds = state.history.length
 
   const centeredCardPhase = state.phase.kind === 'bet-entry'
-  const bottomBarPhase =
-    state.phase.kind === 'playing' ||
-    state.phase.kind === 'mine-hit' ||
-    state.phase.kind === 'settling' ||
-    state.phase.kind === 'settled'
+  // FIX #2 (2026-07-07 mobile HUD/board overlap) — `roundLive` hoisted to
+  // this scope (previously only computed locally inside `DesktopChassis`)
+  // so the mobile branch can gate its own new HUD band + the shared
+  // `domHudActive` prop on the same three "round is live" phases.
+  const roundLive =
+    state.phase.kind === 'playing' || state.phase.kind === 'mine-hit' || state.phase.kind === 'settling'
+  const bottomBarPhase = roundLive || state.phase.kind === 'settled'
 
   // For the canvas. RG-C3: only revealedTiles + (single) mineHitTileIdx
   // travel to the canvas. The full bitmap never goes.
@@ -622,11 +646,12 @@ export function VaultExperience(): ReactElement {
   const safeLeft = Math.max(0, totalTiles - state.mineCount - state.revealedTiles.length)
 
   // ── Shared BET AGAIN handler + guard (RG-C5 anti-drift) ──────────────────
-  // ONE closure + ONE boolean, used by BOTH the sidebar Settlement BET AGAIN
-  // (`settledNext`/`settledNextTop`) AND the new near-board `VaultBoardRebet`
-  // CTA below — the two call sites read the exact same reference every
-  // render, so they structurally cannot drift apart. No `won` branch here;
-  // the guard is purely a balance check, identical on win and loss.
+  // ONE closure + ONE boolean, used by the settled control column's BET
+  // AGAIN (mobile `settledNext`/`settledNextTop`, desktop
+  // `SettledControlColumn`/`SettledNextBetCard`) — the ONLY BET AGAIN home
+  // now that the near-board `VaultBoardRebet` duplicate CTA is removed
+  // (rugsui fix-spec §4, 2026-07-06). No `won` branch here; the guard is
+  // purely a balance check, identical on win and loss.
   const insufficient = state.wagerLamports > state.balanceLamports
   const handleBetAgain = (): void => {
     controller.placeBet().catch(() => undefined)
@@ -705,9 +730,19 @@ export function VaultExperience(): ReactElement {
   // `justifyContent: 'center'` on this flex column centers the whole block
   // vertically, matching the Aviator/Stake-Mines "letterboxed game panel"
   // convention (symmetric bezel, not a lopsided void). On short content this
-  // is a no-op below viewport height; on mobile, where content already
-  // exceeds 100dvh, minHeight is satisfied by the content itself so centering
-  // has no visible effect — the existing top-down scroll is unchanged.
+  // is a no-op below viewport height.
+  // SAFE-CENTERING FIX (2026-07-07, autisk Pixel-7 re-sweep): on mobile the
+  // board + the new mobile HUD band can push content to ~981px, taller than
+  // the Pixel 7's 915px viewport. `justifyContent: 'center'` on an OVERFLOWING
+  // flex column centers the overflow symmetrically — pushing ~40% of the
+  // header (title/phase/round-id) ABOVE y=0, where no scroll can reach it.
+  // Desktop never overflows past its own `minHeight: 100dvh` in practice, so
+  // it keeps plain `justifyContent: 'center'` unchanged. Mobile instead stays
+  // `flex-start` on THIS outer shell and centers via `margin-block: auto` on
+  // the inner content-stack wrapper (see `mobileContentStackStyle` below) —
+  // auto margins center a flex item only when there IS free space and
+  // collapse to 0 once the item overflows, so short content still centers
+  // and tall content pins to the top and scrolls, reachable end to end.
   const pageStyle: CSSProperties = {
     ...styles.page,
     width: '100%',
@@ -726,7 +761,9 @@ export function VaultExperience(): ReactElement {
     padding: isWide ? '10px 16px 6px' : '10px 16px 28px',
     boxSizing: 'border-box',
     minHeight: '100dvh',
-    justifyContent: 'center',
+    // Mobile: `flex-start` + the content-stack wrapper's `margin-block: auto`
+    // (safe-centering, see comment above). Desktop (isWide) unchanged.
+    justifyContent: isWide ? 'center' : 'flex-start',
     // autisk 2026-07-04 (defect #5): PLAYING/SETTLED added +16px over the clean
     // 900px lobby (the header tape's phase status wraps +7px, the footer gains
     // the "OPEN · N of M safe compartments" status line +13px) → scrollHeight
@@ -774,6 +811,22 @@ export function VaultExperience(): ReactElement {
   // this; its controls live entirely in the gutter cards mounted alongside
   // the canvas (see canvasShellChildren below).
   const panelStyle: CSSProperties = { ...styles.controlPanel }
+  // SAFE-CENTERING content-stack wrapper (2026-07-07, mobile only) — houses
+  // the header tape + cabinet + footer as ONE flex item inside `pageStyle`'s
+  // now-`flex-start` mobile shell. `margin-block: auto` centers this item
+  // when it's shorter than the viewport and collapses to 0 once it overflows
+  // (per the CSS auto-margin-on-flex-item spec), so the header never gets
+  // pushed above the reachable scroll area on tall content (Pixel 7). Not
+  // used by the isWide/DesktopChassis branch — desktop keeps the plain
+  // `justifyContent: 'center'` shell above, unchanged.
+  const mobileContentStackStyle: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    width: '100%',
+    minHeight: 0,
+    gap: styles.page.gap as number,
+    marginBlock: 'auto',
+  }
 
   // ONE source of the canvas + its cosmetic overlays, shared by the desktop
   // grid board-column and the mobile stacked layout below — avoids keeping
@@ -810,14 +863,88 @@ export function VaultExperience(): ReactElement {
         // the old header+footer chassis (84vh, ~90px fixed overhead) down to
         // leave room for the new fixed rows (~204px overhead) while staying
         // well under 900px viewport height (0 page scroll, verified live).
-        boardHeightCss={isWide ? 'min(70vh, 800px)' : undefined}
+        // FIX 6 (2026-07-07, consolidated fix pass, MOBILE-ONLY): the
+        // bet-entry-phase board is a NON-INTERACTIVE preview (lobby is
+        // removed, bet-entry IS the landing phase) — at the shared mobile
+        // default (`min(58vh,500px)`, VaultGridCanvas's own fallback below)
+        // it stacked with the world-picker card-size bump and pushed SEND IT
+        // 287px (Pixel7) / 344px (iPhone14Pro) below the fold on every first
+        // landing. Reduced height ONLY for `!isWide && bet-entry` — every
+        // other mobile phase (playing/etc.) and ALL of desktop (`isWide`
+        // branch above, the 183/210 board-Y anchor) are untouched.
+        // FIX #3 (2026-07-07, mobile settled fold fix) — same board-shrink
+        // mechanism, reused for the SETTLED phase only: the settled screen's
+        // BET AGAIN CTA (bottom of `PhaseSurface`) measured 11-68px below the
+        // fold because the settled board rendered at the same full
+        // `min(58vh,500px)` height as `playing`. Shrinking ONLY `!isWide &&
+        // settled` (playing/mine-hit/settling untouched, so the live board
+        // never resizes mid-round) reclaims height for BET AGAIN to clear
+        // the fold on both Pixel 7 and iPhone 14 Pro.
+        // FIX #3 ROUND 2 (2026-07-07, chrome-expanded small-viewport
+        // re-measure) — two independent mobile-touch-qa passes agreed the
+        // first round's `min(40vh, 340px)` cap still left BET AGAIN at
+        // `rect.bottom` ≈826px: 85px below the fold on the REALISTIC
+        // first-load iPhone 14 Pro viewport (usable ≈741px, browser chrome
+        // still expanded) and ~2px below on Pixel 7 (usable ≈824px). Root
+        // cause: plain `vh` resolves against the LARGE viewport (chrome
+        // retracted) even while chrome is actually showing, so the settled
+        // board rendered taller than the real available space. Switched to
+        // `svh` (small-viewport unit — guaranteed available height with
+        // chrome expanded, matches the shell's existing `100dvh`/`88dvh`
+        // usage elsewhere in this file) AND dropped the cap from 340px to
+        // 236px (-104px), which is the ~101px BET AGAIN needs to clear the
+        // iPhone 14 Pro fold with margin to spare. On the binding iPhone 14
+        // Pro viewport (741px usable) this resolves to 30svh=222.3px (under
+        // the 236px cap, still >=200px so the board stays readable) — a
+        // ~104-118px reduction from the prior settled board height,
+        // depending on how much of the old 340px cap vs 40vh term was
+        // actually binding. Scoped to `!isWide && settled` only: playing/
+        // mine-hit/settling (unchanged, live board never resizes mid-round)
+        // and desktop (`isWide` branch above, untouched) are both
+        // unaffected. Orthogonal to FIX #2's HUD-band-to-first-tile gap —
+        // that gap is real-DOM flex spacing between the `mobileHudBand` row
+        // and this canvas element, not derived from this canvas's own
+        // height, so it stays positive regardless of this prop's value.
+        // FIX 2 (2026-07-09, mobile-touch-qa follow-up round) — FIX #6's
+        // `min(16vh,150px)` cleared the fold on Pixel 7 but iPhone 14 Pro
+        // (852 tall, narrower than Pixel 7's 915) still measured SEND IT
+        // 11.3px below the fold at first paint. iPhone 14 Pro's absolute
+        // vh budget is smaller while the header/footer/BetConsole content
+        // above/around it is fixed-px, so it needs a bit more trim than
+        // Pixel 7 does. Reused the SAME mechanism (bet-entry-preview-board
+        // height, `!isWide && bet-entry` only — every other mobile phase
+        // and all of desktop untouched) and tightened it further:
+        // 16vh/150px -> 13vh/125px. Trims ~25px on iPhone 14 Pro (852*0.03
+        // = 25.6px) and ~27px on Pixel 7 (915*0.03 = 27.5px) — both devices
+        // still land comfortably >=100px tall for this non-interactive
+        // preview board.
+        boardHeightCss={
+          isWide
+            ? 'min(70vh, 800px)'
+            : state.phase.kind === 'bet-entry'
+              ? 'min(13vh, 125px)'
+              : state.phase.kind === 'settled'
+                ? 'min(30svh, 236px)'
+                : undefined
+        }
         isWide={isWide}
-        // domHudActive=isWide (2026-07-06): the desktop chassis renders the
-        // multiplier/rug-risk/win-banner as REAL DOM elements in the HUD-zone
-        // row above the board — suppress the canvas's own drawHeroPnl/
-        // drawPumpGauge/drawNextPayoff/drawBottomHint text so nothing
-        // double-renders. Mobile (isWide false) is unchanged.
-        domHudActive={isWide}
+        // domHudActive=isWide (2026-07-06) EXTENDED (2026-07-07, FIX #2) —
+        // desktop already renders the multiplier/rug-risk/win-banner as REAL
+        // DOM elements in the HUD-zone row above the board (suppressing the
+        // canvas's own drawHeroPnl/drawPumpGauge/drawNextPayoff/drawBottomHint
+        // text so nothing double-renders). Mobile now does the SAME for its
+        // own "round is live" + "settled" phases (`bottomBarPhase`, see the
+        // new `mobileHudBand` mounted in the mobile branch below) — the
+        // canvas no longer draws PUMP/BAG/RUG-RISK text into a percentage-
+        // reserved top band at all for those phases, which is what let the
+        // SHITCOIN 7×7 board's taller HUD text clip into its own top safe
+        // row (the % reserve sized for 5×5 wasn't enough at every grid size).
+        // `computeGridLayout`'s `minimalBands` branch (keyed off this same
+        // prop) also kicks in for mobile now, so the grid itself gets the
+        // same thin real-DOM-HUD-aware reserve desktop already uses. Mobile
+        // bet-entry (`!bottomBarPhase`) is UNCHANGED — its small
+        // non-interactive preview board never drew HUD text to begin with.
+        domHudActive={isWide || bottomBarPhase}
         onBoardLayout={setBoardLayout}
       />
       {/* PERFECT-TUMBLER rhythm badge — cosmetic only. Surfaces during
@@ -826,7 +953,7 @@ export function VaultExperience(): ReactElement {
           enforced via vaultCopy.evaluateRhythmTick's pure-function
           signature — see vaultCopy.ts header. */}
       {state.phase.kind === 'playing' && rhythmTick.badge !== null && (
-        <RhythmBadge tier={rhythmTick.badge} />
+        <RhythmBadge tier={rhythmTick.badge} reducedMotion={reducedMotion} />
       )}
       {/* BIG center-screen reveal — fires on every settle. Single
           moment-to-live, narrative headline + outsized multiplier.
@@ -834,25 +961,42 @@ export function VaultExperience(): ReactElement {
           only color + copy bucket shift. */}
       {state.phase.kind === 'settled' && (
         <>
-          <VaultHeroOverlay outcome={state.phase.outcome} reducedMotion={reducedMotion} />
-          {/* Near-board BET AGAIN — INDEPENDENT of VaultHeroOverlay, which
-              auto-dismisses after HERO_VISIBLE_MS (2s). Gated ONLY on
-              phase.kind === 'settled', so it persists the whole settled
-              phase. See VaultBoardRebet header comment for the full
-              reachability rationale. Renders on BOTH mobile AND desktop —
-              the desktop gutter's own NEXT-BET card (SettledNextBetCard)
-              is a second, independent BET AGAIN home (control-surface,
-              near-hand) while THIS one stays the near-board/fixation-point
-              affordance; both share the same handler/guard so they can't
-              drift apart. */}
-          <VaultBoardRebet
-            isWide={isWide}
-            insufficient={insufficient}
-            wagerLamports={state.wagerLamports}
-            onBetAgain={handleBetAgain}
-            reducedMotion={reducedMotion}
-            won={state.phase.outcome.won}
-          />
+          {/* MOBILE OVERLAP FIX (2026-07-07, autisk Pixel-7 re-sweep): the
+              hero headline visually overlapped/bisected the
+              `SettledBoardCaption` pill for ~2s while the mobile settlement
+              panel slides up (duplicate copy, cut in two). Mirrors the
+              existing `suppressSettledCaption`/canvas `drawBottomHint`
+              mobile-suppression pattern (VaultGridCanvas.tsx) — the DOM
+              `SettledBoardCaption` already owns this "N safes / result" job
+              on mobile, so the bigger narrative headline is suppressed there
+              too rather than repositioned. Desktop (isWide) is unchanged —
+              it has the horizontal room for both. */}
+          {isWide && (
+            <VaultHeroOverlay outcome={state.phase.outcome} reducedMotion={reducedMotion} />
+          )}
+          {/* ONE-CTA FIX (rugsui fix-spec §4, 2026-07-06) — `VaultBoardRebet`
+              (the near-board floating BET AGAIN pill) is REMOVED. It was
+              added 2026-07-02 to solve a real problem: the sidebar CTA sat
+              ~750px away in a far-right panel while the eye was pinned to
+              board-center on settle. That problem no longer exists — the
+              2026-07-06 FIXED 5-ZONE GRID CHASSIS rebuild seats
+              `SettledControlColumn`'s BET AGAIN in the SAME row as the
+              HUD-zone/board (a 320px column immediately beside them, not a
+              tall far-right sidebar measured against board-bottom), so the
+              original horizontal-distance rationale is moot. Verified live
+              (see run notes) that the control-column CTA stays above the
+              fold at 1440x900 / 1920x1080 desktop and Pixel 7 / iPhone 14
+              Pro mobile (mobile's `Settlement`'s own `nextTier` sits
+              directly under the board in normal flow, not far away either)
+              before this removal shipped — two CTAs on the settled screen is
+              the exact "two BET AGAIN buttons" bug the spec calls out.
+              `VaultBoardRebet`/its styles/keyframe are deleted below (no
+              inert-but-defined leftover — this one renders real DOM, unlike
+              the harmless-unused VaultGutterCards precedent). The board-
+              width safes-opened/multiplier caption that used to compete for
+              this same visual real estate is now `SettledBoardCaption`
+              (spec §5), a small pill-bg strip instead of a CTA. */}
+          <SettledBoardCaption outcome={state.phase.outcome} />
         </>
       )}
       <VaultCornerChrome
@@ -911,6 +1055,13 @@ export function VaultExperience(): ReactElement {
 
   return (
     <div style={{ ...pageStyle, ...plateAccentVars }}>
+      {/* SAFE-CENTERING content-stack wrapper (2026-07-07, FIX A) — see
+          `mobileContentStackStyle` above. Wraps ONLY the visible header +
+          cabinet + footer stack; the overlays below (OnboardingOverlay,
+          VaultInfoOverlay, the shakeKeyframes <style> tag) stay siblings of
+          this wrapper since they're fixed/absolute-positioned and don't
+          participate in shell centering. */}
+      <div style={mobileContentStackStyle}>
       {/* Header tape — mirror Pulse §2. Mono caps meta; the separator + the
           highlight token run in the game's pump-green (this game's candle
           economy deliberately has NO cyan). MOBILE ONLY as of the 2026-07-06
@@ -922,7 +1073,7 @@ export function VaultExperience(): ReactElement {
         <span style={styles.tapeMeta}>{phaseLabel}</span>
         <span style={styles.tapeMeta}>{roundIdLabel}</span>
         <span style={styles.tapeSeparator} aria-hidden="true" />
-        <span style={styles.tapeTime}>SAFE LEFT {safeLeft.toString().padStart(2, '0')}</span>
+        <span style={styles.tapeTime}>SAFE{safeLeft === 1 ? '' : 'S'} LEFT {safeLeft.toString().padStart(2, '0')}</span>
         {state.phase.kind === 'playing' && (
           <span style={styles.liveBadge}>
             {/* Inline animation must be gated off reducedMotion in JS — a CSS
@@ -951,6 +1102,45 @@ export function VaultExperience(): ReactElement {
             backgroundImage: `linear-gradient(rgba(3,7,13,${mobileBackdrop.scrim}), rgba(3,7,13,${mobileBackdrop.scrim})), url(${mobileBackdrop.backdrop})`,
           }}
         />
+        {/* SCENE EDGE-SCRIM (rugsui fix-spec §1) — mobile shares the exact
+            same edge-darken + bottom-fade layer as desktop (see
+            DesktopChassis for the full rationale); the mobile cabinet is
+            already `position:'relative'` (`cabinetStyle`/`roundCard`), so the
+            same `inset:0` overlay applies unchanged. */}
+        <div aria-hidden="true" data-testid="vault-scene-edge-scrim" style={styles.sceneEdgeScrimLayer} />
+        {/* MOBILE HUD BAND (FIX #2, 2026-07-07) — real DOM row reserved
+            ABOVE the canvas, board-width-anchored via the same live-measured
+            `boardLayout` the desktop HUD-ZONE bar uses, so it sits flush
+            above the actual grid tiles rather than the full cabinet width.
+            Mounted only for `bottomBarPhase` (playing/mine-hit/settling/
+            settled) — bet-entry's small non-interactive preview board never
+            drew HUD text and stays untouched. See `domHudActive` on the
+            shared canvas above for the matching canvas-side suppression. */}
+        {bottomBarPhase && (
+          <div
+            style={{
+              ...styles.mobileHudBand,
+              ...(boardLayout
+                ? {
+                    marginLeft: boardLayout.boardPanelLeftX,
+                    width: Math.max(0, boardLayout.boardPanelRightX - boardLayout.boardPanelLeftX),
+                  }
+                : { width: '100%' }),
+            }}
+            data-testid="vault-mobile-hud-band"
+          >
+            <div
+              style={{
+                ...styles.mobileHudBandInner,
+                ...(state.phase.kind === 'settled' ? settledHudBarTint(state.phase.outcome.won) : null),
+              }}
+              data-testid={state.phase.kind === 'settled' ? 'vault-settled-banner' : 'vault-grid-hud-inner'}
+            >
+              {roundLive && <MobileHudPlayingStats controller={controller} />}
+              {state.phase.kind === 'settled' && <MobileHudSettledBanner outcome={state.phase.outcome} />}
+            </div>
+          </div>
+        )}
         <div style={boardStyle} data-testid="vault-canvas-shell" ref={boardShellRef}>
           {canvasShellChildren}
         </div>
@@ -987,6 +1177,7 @@ export function VaultExperience(): ReactElement {
               ? `Cumulative multiplier ${formatMultiplier(state.cumulativeMultiplierBps)}`
               : ''}
           </span>
+      </div>
       </div>
       <style>{shakeKeyframes}</style>
       <OnboardingOverlay
@@ -1026,33 +1217,33 @@ function VaultInfoOverlay({ onClose }: { readonly onClose: () => void }): ReactE
         <div style={styles.infoBody}>
           <p style={styles.infoLead}>
             Crack open the vault&apos;s sealed compartments to pump your multiplier. Safe ones hold
-            coins that grow your bag — but some hide
+            coins that grow your bag, but some hide
             <strong style={{ color: T.danger }}> rugs</strong>. Hit one and you lose your bet, so
             <strong style={{ color: T.bag }}> take profit</strong> before you do.
           </p>
 
           <span style={styles.infoHead}>THE READOUTS</span>
           <p style={styles.infoText}>
-            <strong>PUMP ×</strong> — your current multiplier. <strong>BAG</strong> — what you cash
-            out right now. <strong>RUGS</strong> / <strong>SAFE LEFT</strong> — how many rugs are
-            hidden vs safe compartments remaining. <strong style={{ color: T.danger }}>RUG RISK %</strong> —
+            <strong>PUMP ×</strong> · your current multiplier. <strong>BAG</strong> · what you cash
+            out right now. <strong>RUGS</strong> / <strong>SAFE LEFT</strong> · how many rugs are
+            hidden vs safe compartments remaining. <strong style={{ color: T.danger }}>RUG RISK %</strong> ·
             the chance your next tap is a rug; it reddens as it climbs.
           </p>
 
           <span style={styles.infoHead}>TWO WAYS TO PLAY</span>
           <p style={styles.infoText}>
-            <strong>MANUAL</strong> — classic: crack compartments one at a time, take profit
+            <strong>MANUAL</strong> · classic: crack compartments one at a time, take profit
             whenever.
             <br />
-            <strong>TRAIL</strong> — plan ahead: switch to TRAIL, then <em>hold &amp; drag</em> across
+            <strong>TRAIL</strong> · plan ahead: switch to TRAIL, then <em>hold &amp; drag</em> across
             compartments to draw a path. Hit <strong>GO</strong> and it auto-opens your path in order; clear
-            the whole path and you keep going — plan another trail or take profit when you&apos;re
+            the whole path and you keep going. Plan another trail or take profit when you&apos;re
             ready. A single rug on the path ends the round.
           </p>
 
           <span style={styles.infoHead}>SET A TARGET (optional)</span>
           <p style={styles.infoText}>
-            <strong style={{ color: T.bag }}>EXIT AT ×</strong> — pick a target multiplier and the
+            <strong style={{ color: T.bag }}>EXIT AT ×</strong> · pick a target multiplier and the
             vault auto-banks for you on the first safe tap that reaches <em>or passes</em> it (set
             2× and a tap that lands 2.27× cashes out there). Leave it <strong>OFF</strong> to decide
             by hand.
@@ -1061,22 +1252,22 @@ function VaultInfoOverlay({ onClose }: { readonly onClose: () => void }): ReactE
           <span style={styles.infoHead}>PICK YOUR WORLD</span>
           <p style={styles.infoText}>
             <strong>BLUECHIPS</strong> (3 rugs) and <strong>ALTSEASON</strong> (5 rugs) pay back
-            ~97% over time. <strong>SHITCOIN</strong> (24 rugs) is wilder — bigger pumps and a hidden{' '}
-            <strong style={{ color: T.bag }}>MOON</strong> jackpot, but a lower ~93.5% payback.
+            ~97% over time. <strong>SHITCOIN</strong> (24 rugs) is wilder, with bigger pumps and a hidden{' '}
+            <strong style={{ color: T.bag }}>MOON</strong> payout, but a lower ~93.5% payback.
             (“RTP” = how much is paid back to players over time; the rest is the house edge.)
           </p>
 
           <span style={styles.infoHead}>MOON &amp; POINTS</span>
           <p style={styles.infoText}>
-            <strong style={{ color: T.bag }}>MOON</strong> — in SHITCOIN one hidden compartment holds the jackpot;
-            reveal it on a winning round for a cash bonus on top. <strong>Ownership points</strong> —
+            <strong style={{ color: T.bag }}>MOON</strong> · in SHITCOIN one hidden compartment holds the MOON;
+            reveal it on a winning round for a cash bonus on top. <strong>Ownership points</strong> ·
             a loyalty reward you earn every round, win or lose (1.5× on a loss). They don’t affect
             payouts.
           </p>
 
           <span style={styles.infoHead}>PROVABLY FAIR</span>
           <p style={styles.infoText}>
-            The rugs are fixed by a random seed the moment you bet — nothing shifts based on where you
+            The rugs are fixed by a random seed the moment you bet. Nothing shifts based on where you
             tap. Every settled round shows a Glass Box receipt so you can verify it.
           </p>
         </div>
@@ -1138,10 +1329,9 @@ function PhaseSurface({
   controller: VaultController
   isWide: boolean
   // Shared BET AGAIN guard/handler — threaded through only for the
-  // 'settled' case (Settlement), so it and the near-board VaultBoardRebet
-  // CTA (rendered independently in VaultExperience's boardRegion) read the
-  // exact same closure/boolean. See the header comment where these are
-  // defined in VaultExperience.
+  // 'settled' case (Settlement), same closure/boolean VaultExperience
+  // defines once and passes to every BET AGAIN call site (the ONLY one now
+  // that the near-board VaultBoardRebet duplicate is removed).
   insufficient: boolean
   onBetAgain: () => void
   /** "bet again · same trail" preset (2026-07-02) — Settlement-only. */
@@ -1259,7 +1449,7 @@ function BetEntry({
       // this existing slot rather than adding a new DOM row (spec option A —
       // compact always-visible intro, per game-designer ruling 2026-07-06).
       eyebrow="APE IN. DODGE THE RUG."
-      hint="crack compartments to pump your multiplier · one rug ends it — cash out first"
+      hint="crack compartments to pump your multiplier · one rug ends it · cash out first"
       wagerLabel="YOUR BET"
       wagerDisplay={<AnimatedUsdc lamports={state.wagerLamports} style={styles.consoleWagerValue} />}
       onStepDown={() => controller.setWager(stepWagerDown(state.wagerLamports))}
@@ -1487,9 +1677,14 @@ function ModeSelector({
                 </span>
                 <span style={styles.worldMeta}>
                   {/* P3 — clearer "N rugs · grid" wording (was the terse
-                      "N/total" that read as a fraction). */}
+                      "N/total" that read as a fraction). FIX 5 (2026-07-07,
+                      consolidated fix pass): `rtpShort` was defined (see its
+                      own doc comment above, "consolidates rugs+grid+RTP onto
+                      ONE stats line") but never actually rendered here — the
+                      only live RTP disclosure was one click deep in HOW TO
+                      PLAY. Restored to the card face. */}
                   <span>
-                    {rugs} rugs · {c.grid}
+                    {rugs} rug{rugs === 1 ? '' : 's'} · {c.grid} · {c.rtpShort}
                   </span>
                   {/* BEST badge — gold, on EVERY world with a real cashed
                       record (RG-C5: config screen only). No record → no
@@ -1591,22 +1786,26 @@ function RugsTuner({
           type="button"
           onClick={() => setCount(count - 1)}
           disabled={count <= min}
-          style={count <= min ? styles.rugsStepBtnDisabled : styles.rugsStepBtn}
+          style={count <= min ? styles.rugsStepBtnHitDisabled : styles.rugsStepBtnHit}
           aria-label="Fewer rugs"
         >
-          −
+          <span style={count <= min ? styles.rugsStepBtnDisabled : styles.rugsStepBtn} aria-hidden="true">
+            −
+          </span>
         </button>
         <span style={styles.rugsStepValue}>
-          {count} <span style={styles.rugsStepValueUnit}>rugs</span>
+          {count} <span style={styles.rugsStepValueUnit}>rug{count === 1 ? '' : 's'}</span>
         </span>
         <button
           type="button"
           onClick={() => setCount(count + 1)}
           disabled={count >= max}
-          style={count >= max ? styles.rugsStepBtnDisabled : styles.rugsStepBtn}
+          style={count >= max ? styles.rugsStepBtnHitDisabled : styles.rugsStepBtnHit}
           aria-label="More rugs"
         >
-          +
+          <span style={count >= max ? styles.rugsStepBtnDisabled : styles.rugsStepBtn} aria-hidden="true">
+            +
+          </span>
         </button>
       </div>
     </div>
@@ -1689,7 +1888,7 @@ function AutopickSafetySurface({ controller }: { controller: VaultController }):
         onClick={controller.toggleAutopick}
         disabled
         style={styles.autopickButton}
-        title="Auto-pick coming in Phase 2 — TUNE-AUTOPICK"
+        title="Auto-pick coming in Phase 2 · TUNE-AUTOPICK"
       >
         enable auto-pick (phase 2)
       </button>
@@ -1776,7 +1975,7 @@ function Playing({
   const trailTargetPayout = settlePayout(state.wagerLamports, trailTargetBps)
   const trailCount = state.trail.length
   const subText = running
-    ? 'running your trail — one rug ends it…'
+    ? 'running your trail · one rug ends it…'
     : trailPending
       ? `${trailCount} tile${trailCount === 1 ? '' : 's'} set · GO reveals them all (a rug ends it) · tap to adjust`
       : state.trailMode
@@ -1837,7 +2036,7 @@ function Playing({
               type="button"
               onClick={() => controller.setTarget(null)}
               style={styles.exitLiveChip}
-              aria-label={`Auto-exit armed at ${formatMultiplier(state.targetMultiplierBps)} — tap to disable`}
+              aria-label={`Auto-exit armed at ${formatMultiplier(state.targetMultiplierBps)} · tap to disable`}
             >
               <span style={styles.exitLiveDot} aria-hidden="true" />
               EXIT @ {formatMultiplier(state.targetMultiplierBps)}
@@ -2023,7 +2222,7 @@ interface SettlementProps {
   controller: VaultController
   outcome: VaultOutcome
   isWide: boolean
-  // Shared with the near-board VaultBoardRebet CTA — see VaultExperience's
+  // Shared with every other BET AGAIN call site — see VaultExperience's
   // header comment where these are defined. Do NOT recompute a local copy
   // here; that reopened the exact drift risk this extraction closes.
   insufficient: boolean
@@ -2249,7 +2448,7 @@ function Settlement({
           onClick={onBetAgainSamePattern}
           disabled={insufficient}
           className="vault-press"
-          style={insufficient ? styles.settledBetAgainSameTrailDisabled : styles.settledBetAgainSameTrail}
+          style={settledSecondaryOutlineStyle(won, insufficient)}
           aria-label={`Bet again with the same trail pattern, ${formatUsdc(state.wagerLamports)}`}
         >
           bet again · same trail →
@@ -2270,7 +2469,7 @@ function Settlement({
       <button
         type="button"
         onClick={() => shareVaultResult(won, headlineBps, deltaLamports, outcome)}
-        style={styles.settledShareLink}
+        style={styles.settledShareButton}
         aria-label="Share this result"
       >
         share ↗
@@ -2331,7 +2530,7 @@ function Settlement({
       )}
       {insufficient && (
         <span style={{ ...styles.settlementHelp, gridColumn: '1 / -1' }}>
-          balance below {formatUsdc(state.wagerLamports)} — lower your wager to continue.
+          balance below {formatUsdc(state.wagerLamports)}, lower your wager to continue.
         </span>
       )}
       {expanded && verifyState === 'matched' && (
@@ -2345,7 +2544,12 @@ function Settlement({
             <Row label="round id" value={outcome.roundIdHex} />
             <Row label="server seed hash" value={outcome.serverSeedHashHex} />
             <Row label="server seed" value={outcome.serverSeedHex} />
-            <Row label="mixer" value={outcome.mixerHex} />
+            {/* FIX #7 (2026-07-07) — "mixer" row REMOVED. `outcome.mixerHex` is
+                sha256('swoobz-originals-vault-v1-mock'), a CONSTANT identical
+                every round; it plays zero role in the real mine derivation or
+                client verification (both key off the hardcoded 'VAULTILE' tag,
+                vaultProvider.ts lines 340/398, verify call below) — showing it
+                on a fairness/provable-fairness surface was misleading. */}
             <Row label="grid" value={`${outcome.gridSize}×${outcome.gridSize}`} />
             <Row label="rugs" value={String(outcome.mineCount)} />
             <Row label="safe tiles revealed" value={String(outcome.revealedTiles.length)} />
@@ -2402,13 +2606,13 @@ function SessionSummaryBeat({ controller }: { controller: VaultController }): Re
     <div style={{ ...styles.sessionBeat, gridColumn: '1 / -1' }} aria-live="polite">
       <div style={styles.sessionBeatLead}>
         <span style={styles.sessionBeatEyebrow}>SESSION FULL · {rows.length} ROUNDS</span>
-        <span style={styles.sessionBeatHint}>a clean stopping point — or keep going</span>
+        <span style={styles.sessionBeatHint}>a clean stopping point · or keep going</span>
       </div>
       <div style={styles.sessionBeatStats}>
         <div style={styles.sessionStat}>
           <span style={styles.sessionStatLabel}>BEST</span>
           <span style={{ ...styles.sessionStatValue, color: T.bag }}>
-            {bestBps > ONE_X_BPS ? formatMultiplier(bestBps) : '—'}
+            {bestBps > ONE_X_BPS ? formatMultiplier(bestBps) : '–'}
           </span>
         </div>
         <div style={styles.sessionStat}>
@@ -2518,8 +2722,8 @@ function shareVaultResult(
   const totalSafe = outcome.gridSize * outcome.gridSize - outcome.mineCount
   const amount = formatUsdc(deltaLamports)
   const text = won
-    ? `Locked in ${mult} on Rug or Riches — ${safeTilesTapped} of ${totalSafe} compartments cracked (+${amount}). provably fair. swoobz.com/originals/vault`
-    : `vault closed at ${mult} — opening another. swoobz.com/originals/vault`
+    ? `Locked in ${mult} on Rug or Riches · ${safeTilesTapped} of ${totalSafe} compartments cracked (+${amount}). provably fair. swoobz.com/originals/vault`
+    : `vault closed at ${mult} · opening another. swoobz.com/originals/vault`
   if (typeof navigator !== 'undefined' && 'share' in navigator) {
     navigator.share({ text }).catch(() => openTwitterIntent(text))
   } else {
@@ -2565,7 +2769,7 @@ function HistoryStrip({
             title={
               r.won
                 ? `cashed out at ${formatMultiplier(r.finalMultiplierBps)}`
-                : `vault closed — busted`
+                : `vault closed, busted`
             }
           >
             {i === 0 && (
@@ -2650,7 +2854,7 @@ function SidebarPulseStrip({
         <div style={styles.sessionStat}>
           <span style={styles.sessionStatLabel}>BEST</span>
           <span style={{ ...styles.sessionStatValue, color: T.bag }}>
-            {bestBps > ONE_X_BPS ? formatMultiplier(bestBps) : '—'}
+            {bestBps > ONE_X_BPS ? formatMultiplier(bestBps) : '–'}
           </span>
         </div>
         <div style={styles.sessionStat}>
@@ -2664,7 +2868,7 @@ function SidebarPulseStrip({
         <div style={styles.sessionStat}>
           <span style={styles.sessionStatLabel}>NET</span>
           <span style={{ ...styles.sessionStatValue, color: rounds > 0 ? (positive ? T.accent : T.danger) : T.textDim }}>
-            {rounds > 0 ? `${positive ? '+' : '-'}${formatUsdc(abs)}` : '—'}
+            {rounds > 0 ? `${positive ? '+' : '-'}${formatUsdc(abs)}` : '–'}
           </span>
         </div>
       </div>
@@ -2882,115 +3086,28 @@ function VaultHeroOverlay({
   )
 }
 
-// ─── Board-center BET AGAIN — near-board reachability CTA ─────────────────
+// ─── Board caption strip — settled-only, safes-opened + result ────────────
 
 /**
- * VaultBoardRebet — a persistent BET AGAIN affordance anchored to
- * board-center, mounted as an INDEPENDENT sibling of VaultHeroOverlay (which
- * auto-dismisses after HERO_VISIBLE_MS = 2s). Gated ONLY on
- * `phase.kind === 'settled'` at the call site in VaultExperience, so it
- * persists the whole settled phase instead of vanishing with the hero.
- *
- * ROOT-CAUSE FIX (2026-07-02, game-designer + composition-designer spec):
- * on settle the eye is pinned to board-center (VaultHeroOverlay's glowing
- * "GOT SBF'D" / win moment) while the sidebar's BET AGAIN sits ~750px away
- * in the far-right panel — a DOM reorder alone doesn't fix a horizontal
- * attention/distance problem. This CTA brings a real affordance TO the
- * fixation point.
- *
- * RG-C5 STRUCTURAL: no `won` branch anywhere in this component's POSITION,
- * SIZE, DELAY, or COPY — placement/timing are IDENTICAL on win and loss
- * (only VaultHeroOverlay's content differs by outcome, as before). Shares
- * ONE handler (`onBetAgain`) + ONE `insufficient` guard with the sidebar's
- * BET AGAIN (both are passed down from the same closure/boolean defined
- * once in VaultExperience), so the two call sites structurally cannot
- * drift apart.
- *
- * MISCLICK GUARD (not a friction mechanic): the CTA lands close to where
- * the player's last tile-tap physically was, so the button is visible
- * immediately but only becomes clickable after a fixed, identical-every-
- * round REBET_LEDGE_ENTER_DELAY_MS. This is NOT a "wait before allowed to
- * act" pacing mechanic — it is purely a mis-tap guard on an element that
- * appears where a finger just was. Does NOT reuse VaultGridCanvas's
- * HOLD_MS / drag-paint TRAIL gesture machinery.
- *
- * MATERIAL: the ledge/plate is the brushed-steel (#1B2330→#090F18) +
- * gold-rivet-trim register already used for `settledPanel`/`controlPanel`
- * — the ONE material in this file that is provably identical across both a
- * win and a loss reference screenshot (unlike the outcome-tinted
- * `heroLabelStack` glass). The button itself reuses `styles.settledBetAgain`
- * / `styles.settledBetAgainDisabled` VERBATIM as its base, no new color
- * TOKEN introduced.
- *
- * FIX 3 (2026-07-04, Tim-approved) — the ONE exception to the "no `won`
- * branch" rule above: the button's FILL now follows the loss color state
- * (flat `T.danger` instead of the green gradient) when `won === false`,
- * exactly like the rest of the settled screen already commits to red on a
- * rug. This is a color-only, static state follow (no timer, no escalation)
- * — POSITION/SIZE/DELAY/COPY stay outcome-agnostic per the original
- * rationale above, only the fill color now threads `won`.
+ * SettledBoardCaption — replaces the removed `VaultBoardRebet` near-board CTA
+ * (rugsui fix-spec §4: "one CTA only", the near-board pill was a SECOND BET
+ * AGAIN duplicating `SettledControlColumn`'s). This is NOT a CTA — a small
+ * read-only pill strip under the board, RG-C3-safe count-only copy ("N SAFES
+ * OPENED · PAID OUT AT Xx" / "N SAFES OPENED · RUGGED"), per fix-spec §5. On
+ * its own `settledBoardCaption` pill bg so it stays legible over the
+ * full-bleed art regardless of world. Renders on both mobile and desktop —
+ * position:absolute within `boardRegion` (already `position:relative`), so
+ * it never affects the canvas's own measured rect / board-Y.
  */
-const REBET_LEDGE_ENTER_DELAY_MS = 240
-
-function VaultBoardRebet({
-  isWide,
-  insufficient,
-  wagerLamports,
-  onBetAgain,
-  reducedMotion,
-  won,
-}: {
-  isWide: boolean
-  insufficient: boolean
-  wagerLamports: bigint
-  onBetAgain: () => void
-  reducedMotion: boolean
-  /** FIX 3 (2026-07-04) — outcome flag, color-only (see header comment). */
-  won: boolean
-}): ReactElement {
-  // Misclick guard only — see header comment. Fixed module-const delay,
-  // identical every round, never scaled by outcome/streak/session.
-  const [ready, setReady] = useState(false)
-  useEffect(() => {
-    setReady(false)
-    const t = setTimeout(() => setReady(true), REBET_LEDGE_ENTER_DELAY_MS)
-    return () => clearTimeout(t)
-    // Re-arms on every fresh settle (outcome-agnostic — no `won` dependency).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
+function SettledBoardCaption({ outcome }: { outcome: VaultOutcome }): ReactElement {
+  const safeCount = outcome.revealedTiles.length
+  const safeWord = `SAFE${safeCount === 1 ? '' : 'S'} OPENED`
+  const text = outcome.won
+    ? `${safeCount} ${safeWord} · PAID OUT AT ${formatMultiplier(outcome.finalMultiplierBps)}`
+    : `${safeCount} ${safeWord} · RUGGED`
   return (
-    <div
-      style={{
-        ...styles.boardRebetWrap,
-        ...(isWide ? styles.boardRebetWrapDesktop : styles.boardRebetWrapMobile),
-        animation: reducedMotion
-          ? 'none'
-          : 'vault-rebet-ledge-enter 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both',
-      }}
-      data-testid="vault-board-rebet"
-    >
-      <div style={styles.boardRebetLedge} aria-hidden="false">
-        <button
-          type="button"
-          onClick={onBetAgain}
-          disabled={insufficient}
-          className="vault-press"
-          style={{
-            ...(insufficient ? styles.settledBetAgainDisabled : styles.settledBetAgain),
-            // FIX 3 (2026-07-04) — color-only loss follow, see header comment.
-            ...(won || insufficient ? null : { background: T.danger }),
-            // Wrapper + ledge are pointerEvents:'none' (decorative); ONLY the
-            // button opts back in, and only once `ready` — before that,
-            // clicks pass through to the canvas beneath (no double-fire, no
-            // dead-click trap).
-            pointerEvents: ready ? 'auto' : 'none',
-          }}
-          aria-label={`Bet again, ${formatUsdc(wagerLamports)}`}
-        >
-          bet again →
-        </button>
-      </div>
+    <div style={styles.settledBoardCaption} data-testid="vault-settled-board-caption" aria-hidden="true">
+      {text}
     </div>
   )
 }
@@ -3004,12 +3121,27 @@ function VaultBoardRebet({
  * RG-C5 STRUCTURAL: receives ONLY a tier ('rhythm' | 'perfect'). The tier
  * is computed in vaultCopy.evaluateRhythmTick from timestamps + cumulative
  * BPS — never from streak length or session-rounds.
+ *
+ * REDUCED-MOTION FIX (2026-07-07, autisk Pixel-7 re-sweep): the entrance
+ * animation was unconditional, unlike every sibling animated element in
+ * this file (`liveDot`, `VaultHeroOverlay`'s enter/door/label animations).
+ * Mirrors the SAME inline-override pattern used for `liveDot` just above —
+ * `reducedMotion` swaps the animation to `'none'` (instant/opacity-only via
+ * the base style's non-animation properties) without touching tier logic
+ * or the RHYTHM_BADGE_VISIBLE_MS/evaluateRhythmTick timing (RG-C5).
  */
-function RhythmBadge({ tier }: { tier: 'rhythm' | 'perfect' }): ReactElement {
+function RhythmBadge({
+  tier,
+  reducedMotion,
+}: {
+  tier: 'rhythm' | 'perfect'
+  reducedMotion: boolean
+}): ReactElement {
   const label = rhythmBadgeLabel(tier)
+  const baseStyle = tier === 'perfect' ? styles.rhythmBadgePerfect : styles.rhythmBadgeRhythm
   return (
     <div
-      style={tier === 'perfect' ? styles.rhythmBadgePerfect : styles.rhythmBadgeRhythm}
+      style={reducedMotion ? { ...baseStyle, animation: 'none' } : baseStyle}
       data-testid="vault-rhythm-badge"
       data-tier={tier}
       aria-live="polite"
@@ -3037,7 +3169,7 @@ function PlayingStatusCard({ controller }: { controller: VaultController }): Rea
   const running = state.autoActive
   const trailPending = state.trail.length > 0 && !running
   const subText = running
-    ? 'running your trail — one rug ends it…'
+    ? 'running your trail · one rug ends it…'
     : trailPending
       ? `${state.trail.length} tile${state.trail.length === 1 ? '' : 's'} set · GO reveals them all (a rug ends it) · tap to adjust`
       : state.trailMode
@@ -3064,7 +3196,7 @@ function PlayingStatusCard({ controller }: { controller: VaultController }): Rea
           type="button"
           onClick={() => controller.setTarget(null)}
           style={styles.exitLiveChip}
-          aria-label={`Auto-exit armed at ${formatMultiplier(state.targetMultiplierBps)} — tap to disable`}
+          aria-label={`Auto-exit armed at ${formatMultiplier(state.targetMultiplierBps)} · tap to disable`}
         >
           <span style={styles.exitLiveDot} aria-hidden="true" />
           EXIT @ {formatMultiplier(state.targetMultiplierBps)}
@@ -3299,13 +3431,7 @@ function SettledNextBetCard({
           onClick={onBetAgainSamePattern}
           disabled={insufficient}
           className="vault-press"
-          style={{
-            ...(insufficient ? styles.settledBetAgainSameTrailDisabled : styles.settledBetAgainSameTrail),
-            width: '100%',
-            // Desktop secondary = 36px / radius 8 (layout-spec). Mobile keeps
-            // the shared 44px min touch target.
-            ...(compactSecondary ? { minHeight: 36, height: 36, borderRadius: 8 } : null),
-          }}
+          style={{ ...settledSecondaryOutlineStyle(outcome.won, insufficient, compactSecondary), width: '100%' }}
           aria-label={`Bet again with the same trail pattern, ${formatUsdc(state.wagerLamports)}`}
         >
           bet again · same trail →
@@ -3327,7 +3453,7 @@ function SettledNextBetCard({
               outcome,
             )
           }
-          style={styles.settledShareLink}
+          style={styles.settledShareButton}
           aria-label="Share this result"
         >
           share ↗
@@ -3394,7 +3520,8 @@ function SettledReceiptCard({
             <ReceiptRowStacked label="round id" value={outcome.roundIdHex} />
             <ReceiptRowStacked label="server seed hash" value={outcome.serverSeedHashHex} />
             <ReceiptRowStacked label="server seed" value={outcome.serverSeedHex} />
-            <ReceiptRowStacked label="mixer" value={outcome.mixerHex} />
+            {/* FIX #7 (2026-07-07) — "mixer" row REMOVED, see the identical
+                comment on the desktop `Row` receipt above. */}
             <ReceiptRowStacked label="grid" value={`${outcome.gridSize}×${outcome.gridSize}`} />
             <ReceiptRowStacked label="rugs" value={String(outcome.mineCount)} />
             <ReceiptRowStacked label="safe tiles revealed" value={String(outcome.revealedTiles.length)} />
@@ -3762,6 +3889,14 @@ function DesktopChassis({
           backgroundImage: `linear-gradient(rgba(3,7,13,${currentBackdrop.scrim}), rgba(3,7,13,${currentBackdrop.scrim})), url(${currentBackdrop.backdrop})`,
         }}
       />
+      {/* SCENE EDGE-SCRIM (rugsui fix-spec §1, 2026-07-06) — a second layer
+          on top of the shell-wide backdrop photo, darkening the left/right
+          edges (control-column side hardest) while leaving the 18-60%
+          middle band clear so the board keeps full art contrast. Same
+          `zIndex: 0` as `sceneBackdropLayer` above, later in DOM order so it
+          paints on top of it; every real UI zone (topbar/hud/board/control/
+          status) is `zIndex: 1` and unaffected. */}
+      <div aria-hidden="true" data-testid="vault-scene-edge-scrim" style={styles.sceneEdgeScrimLayer} />
       <DesktopTopBar
         phaseLabel={phaseLabel}
         roundIdLabel={roundIdLabel}
@@ -3772,7 +3907,17 @@ function DesktopChassis({
 
       <div style={styles.desktopGridHud} data-testid="DesktopHudRow">
         <div
-          style={{ ...styles.desktopGridHudBar, ...hudInnerStyle }}
+          style={{
+            ...styles.desktopGridHudBar,
+            ...hudInnerStyle,
+            // WIN-BANNER TINT (rugsui fix-spec §3) — the HUD-ZONE bar already
+            // sits at board-width, above the board, at the fixed GRID_HUD_H
+            // row (see `hudInnerStyle`/grid rows above) — board-Y is
+            // untouched by this, only the FILL/BORDER swap in on settle.
+            ...(phaseKind === 'settled'
+              ? settledHudBarTint(state.phase.outcome.won)
+              : null),
+          }}
           data-testid={phaseKind === 'settled' ? 'vault-settled-banner' : 'vault-grid-hud-inner'}
         >
           {phaseKind === 'bet-entry' && (
@@ -3860,7 +4005,7 @@ function DesktopStatusBar({
   const totalTiles = state.gridSize * state.gridSize
   let leftText = ''
   if (phaseKind === 'bet-entry') {
-    leftText = `SAFE LEFT ${safeLeft.toString().padStart(2, '0')}`
+    leftText = `SAFE${safeLeft === 1 ? '' : 'S'} LEFT ${safeLeft.toString().padStart(2, '0')}`
   } else if (phaseKind === 'playing' || phaseKind === 'mine-hit' || phaseKind === 'settling') {
     leftText = `OPEN ${state.revealedTiles.length} of ${totalTiles - state.mineCount} · ${
       state.trailMode
@@ -3910,10 +4055,31 @@ function HudWorldInfo({
         {card?.name ?? mode.toUpperCase()} · {gridSize}×{gridSize}
       </span>
       <span style={styles.desktopGridHudRight}>
-        {mineCount} RUGS · FIRST TAP {formatMultiplier(firstTapBps)}
+        {mineCount} RUG{mineCount === 1 ? '' : 'S'} · FIRST TAP {formatMultiplier(firstTapBps)}
       </span>
     </>
   )
+}
+
+// SETTLED-BANNER FILL (rugsui fix-spec §3) — win/loss variant of the
+// HUD-ZONE bar. No pre-existing green/red-tinted OPAQUE plate token to reuse
+// (`VAULT_PLATE_FILL` is the blue-steel/gold family — wrong hue for an
+// outcome banner), so this is a new pair of tokens, built with the SAME
+// opaque top-lighter/bottom-darker 180deg gradient construction
+// `VAULT_PLATE_FILL` uses, just re-hued to the game's EXISTING win/loss
+// accent tokens (`T.accent` #22D37D green / `T.danger` #FF4D4D red) rather
+// than the mockup's raw literals (`rgba(18,36,26,.95)` / `#21d07a`) — the
+// border directly reuses `T.accent`/`T.danger`, satisfying the "reuse the
+// existing win/accent-green token" instruction. Delta vs. the mockup: hue
+// tuned to vault's own established green/red family, alpha kept at the
+// spec's 0.95 (near-opaque, matching every other VAULT-PLATE surface).
+const SETTLED_BANNER_FILL_WIN = 'linear-gradient(180deg, rgba(24,54,38,0.95) 0%, rgba(8,20,14,0.95) 100%)'
+const SETTLED_BANNER_FILL_LOSS = 'linear-gradient(180deg, rgba(54,24,24,0.95) 0%, rgba(20,8,8,0.95) 100%)'
+function settledHudBarTint(won: boolean): CSSProperties {
+  return {
+    background: won ? SETTLED_BANNER_FILL_WIN : SETTLED_BANNER_FILL_LOSS,
+    border: `1px solid ${won ? T.accent : T.danger}`,
+  }
 }
 
 function HudPlayingStats({ controller }: { controller: VaultController }): ReactElement {
@@ -3973,7 +4139,80 @@ function HudSettledBanner({ outcome }: { outcome: VaultOutcome }): ReactElement 
   )
 }
 
+// ─── MOBILE HUD BAND content (FIX #2, 2026-07-07) ──────────────────────────
+// Compact twins of `HudPlayingStats`/`HudSettledBanner` above, sized for the
+// narrower mobile board width (down to ~270px at SHITCOIN 7×7 on Pixel 7)
+// rather than reusing the desktop 44px hero numeral, which doesn't fit
+// beside the "RUG RISK NN%" caption at that width. Deliberately separate
+// components (not a shared `compact` prop on the desktop ones) so this
+// mobile-only tuning can never regress the taste-approved desktop HUD-ZONE.
+
+function MobileHudPlayingStats({ controller }: { controller: VaultController }): ReactElement {
+  const { state } = controller
+  const potentialPayout = settlePayout(state.wagerLamports, state.cumulativeMultiplierBps)
+  const totalTiles = state.gridSize * state.gridSize
+  const tilesLeft = totalTiles - state.revealedTiles.length
+  const rugRisk = tilesLeft > 0 ? state.mineCount / tilesLeft : 0
+  return (
+    <>
+      <span style={styles.mobileHudHeroLeft} data-testid="vault-hud-pump-hero">
+        <span style={styles.mobileHudHeroMult} data-testid="vault-hud-pump-value">
+          {formatMultiplier(state.cumulativeMultiplierBps)}
+        </span>
+        <span style={styles.mobileHudHeroMeta}>
+          <span style={styles.mobileHudHeroKicker}>PUMP</span>
+          <span style={styles.mobileHudHeroBag}>BAG {formatUsdc(potentialPayout)}</span>
+        </span>
+      </span>
+      <span
+        style={{
+          ...styles.mobileHudRight,
+          color: rugRisk > 0.5 ? T.danger : styles.mobileHudRight.color,
+        }}
+      >
+        RUG RISK {Math.round(rugRisk * 100)}%
+      </span>
+    </>
+  )
+}
+
+function MobileHudSettledBanner({ outcome }: { outcome: VaultOutcome }): ReactElement {
+  const won = outcome.won
+  const delta = won ? outcome.payoutLamports - outcome.wagerLamports : outcome.wagerLamports
+  const color = won ? T.accent : T.danger
+  return (
+    <>
+      <span style={styles.mobileHudHeroLeft} data-testid="vault-hud-pump-hero">
+        <span style={{ ...styles.mobileHudHeroMult, color }} data-testid="vault-hud-pump-value">
+          {won ? formatMultiplier(outcome.finalMultiplierBps) : 'BUST'}
+        </span>
+        <span style={styles.mobileHudHeroMeta}>
+          <span style={{ ...styles.mobileHudHeroKicker, color }}>{won ? 'SECURED THE BAG' : 'RUGGED'}</span>
+        </span>
+      </span>
+      <span style={{ ...styles.mobileHudRight, color }}>
+        {won ? '+' : '-'}
+        {formatUsdc(delta)}
+      </span>
+    </>
+  )
+}
+
 // ─── CONTROL COLUMN content (zone 4, 320px, spans HUD-ZONE + BOARD rows) ───
+
+// SAME-TRAIL secondary-outline style (rugsui fix-spec §2) — one helper
+// shared by BOTH the mobile `Settlement` and desktop `SettledNextBetCard`
+// call sites so the win/loss + compact-height branches can't drift apart
+// (same pattern as `settledHudBarTint` above). `compact` = desktop's 36px/
+// radius-8 layout-spec height (see `compactSecondary` prop doc).
+function settledSecondaryOutlineStyle(won: boolean, insufficient: boolean, compact?: boolean): CSSProperties {
+  if (insufficient) return styles.settledBetAgainSameTrailDisabled
+  return {
+    ...styles.settledBetAgainSameTrail,
+    ...(won ? null : { background: 'rgba(255,77,77,0.12)', color: T.danger, border: '1px solid rgba(255,77,77,0.38)' }),
+    ...(compact ? { minHeight: 36, height: 36, borderRadius: 8 } : null),
+  }
+}
 
 /** MANUAL | TRAIL segmented toggle, extracted so Settled's control column can
  *  offer it too (previously only Playing's `PlayingActionsCard` rendered it —
@@ -4053,7 +4292,7 @@ function BetEntryControlColumn({ controller }: { controller: VaultController }):
         <span style={styles.betEntryIntroLabel}>HOW IT WORKS</span>
         <span style={styles.betEntryIntroLine}>
           <strong style={styles.betEntryIntroStrong}>APE IN. DODGE THE RUG.</strong> crack
-          compartments to pump your multiplier — one rug ends it, cash out first.
+          compartments to pump your multiplier · one rug ends it · cash out first.
         </span>
       </div>
       <div style={styles.betEntryPicker} data-testid="vault-board-worldpicker">
@@ -4147,16 +4386,21 @@ function PlayingControlColumn({ controller }: { controller: VaultController }): 
        *  opacity) to ~3.45:1. Neither the caption nor the locked wager VALUE
        *  is a disabled control — only the two stepper buttons are — so the
        *  dimming now lives ONLY on those two `disabled` buttons. The
-       *  "locked" affordance stays fully communicated by the VERGRENDELD
+       *  "locked" affordance stays fully communicated by the BET · LOCKED
        *  label text plus the visibly dimmed, `disabled`-attributed steppers. */}
+      {/* FIX 4 (2026-07-07, consolidated fix pass) — the label below read
+          "INZET · VERGRENDELD", an accidental Dutch transcription introduced
+          by the WCAG AA fix above (this game's UI is English throughout).
+          Restored to "BET · LOCKED". The two aria-labels also dropped their
+          em-dash for the Swoobz no-em-dash copy register. */}
       <div style={styles.gutterCard} data-testid="vault-ctl-wager-locked">
-        <span style={styles.ctlLabel}>INZET · VERGRENDELD</span>
+        <span style={styles.ctlLabel}>BET · LOCKED</span>
         <div style={styles.settledWagerWindow}>
           <button
             type="button"
             disabled
             style={{ ...styles.settledStepBtn, opacity: 0.55 }}
-            aria-label="Bet locked — decrease disabled"
+            aria-label="Bet locked, decrease disabled"
           >
             −
           </button>
@@ -4165,7 +4409,7 @@ function PlayingControlColumn({ controller }: { controller: VaultController }): 
             type="button"
             disabled
             style={{ ...styles.settledStepBtn, opacity: 0.55 }}
-            aria-label="Bet locked — increase disabled"
+            aria-label="Bet locked, increase disabled"
           >
             +
           </button>
@@ -4219,6 +4463,15 @@ function SettledControlColumn({
   if (state.phase.kind !== 'settled') return null
   const outcome = state.phase.outcome
   const hasSession = state.history.length > 0
+  // FIX 1 (2026-07-07, consolidated fix pass): desktop's GRIDV2 rebuild of
+  // the settled control column never carried over the SESSION META
+  // (ownership-points) row that the mobile `Settlement` component renders
+  // at ~L2159-2168 — Tim's named loss-friction UX, silently absent on BOTH
+  // desktop widths, win and loss. Same pointsForBet/formatPoints/
+  // pointsMultLabel pattern as mobile, NOT a resurrection of the dead
+  // `SettledMetaCard`/`VaultGutterCards` path.
+  const ctlPointsEarned = pointsForBet(outcome.wagerLamports, outcome.won)
+  const ctlPointsMultLabel = outcome.won ? '1.0x on the win' : '1.5x loss-amplified'
   // GRIDV2 SESSION-PULSE MOCKUP-PARITY FIX (2026-07-06, round 4 — supersedes
   // round 3). Round 3 grew SESSIE (`flex:1, minHeight:0`) and had
   // SidebarPulseStrip spread its OWN stat rows apart (`sidebarPulse`'s
@@ -4235,6 +4488,16 @@ function SettledControlColumn({
       <div style={styles.gutterCard} data-testid="vault-ctl-style">
         <span style={styles.ctlLabel}>PLAY STYLE</span>
         <PlayStyleToggle controller={controller} />
+      </div>
+      <div style={styles.gutterCard} data-testid="vault-ctl-meta">
+        <span style={styles.ctlLabel}>SESSION META</span>
+        <span style={styles.settledPointsValue}>+{formatPoints(ctlPointsEarned)}</span>
+        <span style={styles.settledMetaDim}>pts · {ctlPointsMultLabel}</span>
+        {outcome.moonPayoutLamports > 0n && (
+          <span style={{ ...styles.settledMetaDim, color: '#FFB000' }}>
+            · 🌙 +{formatUsdc(outcome.moonPayoutLamports)}
+          </span>
+        )}
       </div>
       <div data-testid="vault-ctl-cta">
         <SettledNextBetCard
@@ -4637,19 +4900,6 @@ html, body { overflow-x: hidden; max-width: 100%; }
   100% { opacity: 1; transform: translate3d(-50%, 0,   0) scale(1.00); }
 }
 /*
-  Near-board rebet CTA (VaultBoardRebet) — quiet translateY+opacity fade-in
-  ONLY (no scale, no glow). RG-C5 SAFE: fixed 260ms module-const duration,
-  identical on win and loss (this component never reads the won flag). The
-  -50% baked into the keyframe mirrors vault-rhythm-badge-enter above — the
-  wrapper's static left: 50% needs the animated transform to already
-  include the horizontal center, or the animation would visibly re-center
-  the element mid-fade.
-*/
-@keyframes vault-rebet-ledge-enter {
-  0%   { opacity: 0; transform: translate3d(-50%, 8px, 0); }
-  100% { opacity: 1; transform: translate3d(-50%, 0,   0); }
-}
-/*
   Mobile sizing — Pixel 7 / iPhone 12 viewports. The canvas shell collapses
   user-select for the entire game area so tap-and-hold on tile faces never
   triggers an iOS text selection. The header tape font ramps down + the
@@ -4801,6 +5051,93 @@ const styles: Record<string, CSSProperties> = {
     width: '100%',
     zIndex: 1,
   },
+  // MOBILE HUD BAND (FIX #2, 2026-07-07 mobile HUD/board overlap fix) — a
+  // real DOM row seated ABOVE the canvas, board-width-anchored via the same
+  // live-measured `boardLayout` the desktop HUD-ZONE bar uses (see
+  // `hudInnerStyle` in `DesktopChassis`). Mobile previously relied on the
+  // CANVAS drawing its own PUMP/BAG/RUG-RISK text inside a percentage-
+  // reserved top band (`computeGridLayout`'s non-minimal ~15% portrait
+  // reserve); at SHITCOIN's 7×7 grid that reserve wasn't tall enough for the
+  // full 3-line HUD text stack and the bottom line clipped into the top
+  // safe row. This band owns that space OUTSIDE the canvas entirely (see
+  // `domHudActive={isWide || bottomBarPhase}` at the shared canvas call
+  // site), so the overlap is now structurally impossible at any grid size.
+  // Reuses the SAME translucent `rgba(9,15,24,0.55)` fill as the desktop
+  // HUD-ZONE bar (`desktopGridHudBar`) so it reads as part of the scene
+  // (the shared per-world backdrop shows through), never a sterile grey gap.
+  mobileHudBand: {
+    display: 'flex',
+    alignItems: 'stretch',
+    flexShrink: 0,
+    marginBottom: 8,
+    zIndex: 1,
+    minWidth: 0,
+  },
+  mobileHudBandInner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    width: '100%',
+    minHeight: 52,
+    padding: '8px 12px',
+    background: 'rgba(9,15,24,0.55)',
+    border: `1px solid ${T.borderSubtle}`,
+    borderRadius: 10,
+    boxSizing: 'border-box',
+    minWidth: 0,
+  },
+  mobileHudHeroLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+  mobileHudHeroMult: {
+    fontFamily: T.fontMono,
+    fontSize: 24,
+    fontWeight: 800,
+    lineHeight: 1,
+    letterSpacing: '-0.01em',
+    color: T.accent,
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+  },
+  mobileHudHeroMeta: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 1,
+    minWidth: 0,
+  },
+  mobileHudHeroKicker: {
+    fontFamily: T.fontMono,
+    fontSize: 8,
+    fontWeight: 700,
+    letterSpacing: '0.14em',
+    textTransform: 'uppercase',
+    color: T.textMuted,
+    whiteSpace: 'nowrap',
+  },
+  mobileHudHeroBag: {
+    fontFamily: T.fontMono,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.01em',
+    color: T.bag,
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+  },
+  mobileHudRight: {
+    fontFamily: T.fontMono,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: '0.03em',
+    color: T.textMuted,
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    textAlign: 'right',
+  },
   // Shell-wide per-world backdrop photo — the single DOM layer that replaces
   // the old canvas-only `ctx.drawImage(backdrop,...)` draw (moved out of
   // VaultGridCanvas.tsx, 2026-07-06 doortrekken-de-achtergrond fix). Painted
@@ -4820,6 +5157,24 @@ const styles: Record<string, CSSProperties> = {
     backgroundSize: 'cover',
     backgroundPosition: 'center',
     backgroundRepeat: 'no-repeat',
+  },
+  // SCENE EDGE-SCRIM (rugsui fix-spec §1) — mounted as the NEXT sibling
+  // right after `sceneBackdropLayer` (same `zIndex: 0`, later in DOM order,
+  // so it paints ON TOP of the photo+wash but still UNDER every zIndex:1 UI
+  // layer). Two background layers in one element: the bottom-fade image is
+  // listed FIRST (top of the paint stack) and pinned to a 70px band at the
+  // bottom via `backgroundSize`/`backgroundPosition`; the edge-darken
+  // horizontal gradient is listed second and covers the full box. Never
+  // blurs the art — darken-only, exactly per spec.
+  sceneEdgeScrimLayer: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 0,
+    pointerEvents: 'none',
+    backgroundImage: `${VAULT_SCRIM_BOTTOM}, ${VAULT_SCRIM_EDGE_H}`,
+    backgroundSize: '100% 70px, 100% 100%',
+    backgroundPosition: 'bottom, top',
+    backgroundRepeat: 'no-repeat, no-repeat',
   },
   canvasOverlayCenter: {
     position: 'absolute',
@@ -5600,6 +5955,16 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'space-between',
     gap: 12,
   },
+  // WCAG 2.5.5 touch-target fix (2026-07-09, vault-native mine-count stepper
+  // — the shared BetConsole's own stepper was already fixed on 2026-07-07,
+  // this is the vault-owned lookalike control that fix didn't cover). Same
+  // idiom as BetConsole's `stepBtn`/`stepBtnHit` pair: this style is now the
+  // VISIBLE swatch only (unchanged 40x40, unchanged fill/border/radius —
+  // byte-identical to the pre-fix values), rendered on an inner <span>
+  // centered inside a new invisible 44x44 `rugsStepBtnHit` wrapper <button>
+  // that carries the real interactive surface (cursor/touchAction moved
+  // there). Visible appearance is pixel-identical; only the tappable region
+  // grows.
   rugsStepBtn: {
     width: 40,
     height: 40,
@@ -5623,8 +5988,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 22,
     fontWeight: 700,
     lineHeight: 1,
-    cursor: 'pointer',
-    touchAction: 'manipulation',
   },
   rugsStepBtnDisabled: {
     width: 40,
@@ -5642,8 +6005,39 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 22,
     fontWeight: 700,
     lineHeight: 1,
-    cursor: 'not-allowed',
     opacity: 0.5,
+  },
+  // The real, invisible, 44x44 hit target (see comment above `rugsStepBtn`).
+  // Zero padding/border/background of its own — mirrors BetConsole's
+  // `stepBtnHit`. `touchAction:'manipulation'` lives here (the real
+  // <button>), not on the inner visual span.
+  rugsStepBtnHit: {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    margin: 0,
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    touchAction: 'manipulation',
+  },
+  rugsStepBtnHitDisabled: {
+    width: 44,
+    height: 44,
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    margin: 0,
+    background: 'transparent',
+    border: 'none',
+    cursor: 'not-allowed',
+    touchAction: 'manipulation',
   },
   rugsStepValue: {
     flex: 1,
@@ -6157,7 +6551,11 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'center',
     touchAction: 'manipulation',
   },
-  settledLinks: { display: 'flex', gap: 16, justifyContent: 'flex-end', alignItems: 'center' },
+  // Side-by-side NEW SETUP / SHARE row (rugsui fix-spec §2/§4 column-order:
+  // "NEW SETUP · SHARE (side by side)"). Was `justifyContent:'flex-end'` +
+  // shrink-to-fit bare links; now an even 2-up row (both buttons carry their
+  // own `flex: 1`) matching the mockup.
+  settledLinks: { display: 'flex', gap: 8, alignItems: 'center' },
   // `settledLinksBottom` (the old desktop `margin-top:auto` bottom-pin
   // variant) is RETIRED as of the BOTTOM-BAR PIVOT (2026-07-03) — the
   // panel no longer stretches to board height, so there is no leftover
@@ -6245,6 +6643,7 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: T.fontMono,
     minWidth: 200,
     cursor: 'pointer',
+    touchAction: 'manipulation',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.30), inset 0 -2px 0 rgba(0,0,0,0.20)',
     display: 'flex',
     flexDirection: 'column',
@@ -6482,6 +6881,7 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: T.fontMono,
     minWidth: 240,
     cursor: 'pointer',
+    touchAction: 'manipulation',
     boxShadow:
       'inset 0 1px 0 rgba(255,255,255,0.30), inset 0 -2px 0 rgba(0,0,0,0.20), 0 0 32px rgba(0,230,118,0.32)',
     display: 'flex',
@@ -6504,6 +6904,7 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: T.fontMono,
     minWidth: 200,
     cursor: 'not-allowed',
+    touchAction: 'manipulation',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -6572,13 +6973,16 @@ const styles: Record<string, CSSProperties> = {
     whiteSpace: 'nowrap',
     touchAction: 'manipulation',
   },
-  // "bet again · same trail" preset (2026-07-02) — a VARIANT of
-  // `settledBetAgain`/`settledBetAgainDisabled`, not a new accent: same
-  // green/gold gradient family, no cyan. Reads as the SECONDARY of the two
-  // CTAs via typography weight (smaller font, tighter letter-spacing,
-  // slightly reduced opacity) rather than a smaller touch target — height
-  // stays at the same 44px floor as the primary CTA (mobile-touch-qa's
-  // Apple HIG 44pt minimum applies here too).
+  // "bet again · same trail" preset (2026-07-02). OUTLINE treatment
+  // (rugsui fix-spec §2/§4, 2026-07-06 — was a filled green gradient
+  // matching the primary CTA, which blurred the primary/secondary
+  // hierarchy the mockup draws sharply). `background`/`border` reuse the
+  // EXISTING soft-accent tokens `vaultBetTheme.accentSoftBg`/
+  // `accentSoftBorder` (rgba(0,230,118,0.12)/(0.38)) rather than inventing a
+  // new pair — same "outline buttons on art also get the panel bg" rule as
+  // every other secondary control here. Loss-state override lives in
+  // `settledSecondaryOutlineStyle` below (call-site only, mirrors the FIX 3
+  // pattern the primary CTA already uses).
   settledBetAgainSameTrail: {
     padding: '11px 20px',
     minHeight: 44,
@@ -6587,9 +6991,9 @@ const styles: Record<string, CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: `linear-gradient(180deg, ${T.accentSolid}, #00a85a)`,
-    color: T.accentInk,
-    border: 'none',
+    background: 'rgba(0, 230, 118, 0.12)',
+    color: T.accent,
+    border: '1px solid rgba(0, 230, 118, 0.38)',
     borderRadius: 10,
     fontFamily: T.fontMono,
     fontSize: 11,
@@ -6598,8 +7002,6 @@ const styles: Record<string, CSSProperties> = {
     textTransform: 'uppercase',
     cursor: 'pointer',
     whiteSpace: 'nowrap',
-    opacity: 0.88,
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.30), inset 0 -2px 0 rgba(0,0,0,0.20)',
     touchAction: 'manipulation',
   },
   settledBetAgainSameTrailDisabled: {
@@ -6719,11 +7121,14 @@ const styles: Record<string, CSSProperties> = {
   // WITHOUT a filled accent gradient, so BET AGAIN stays the unambiguous
   // primary action. `settledChangeLink` above is left untouched (unused by
   // "change mode" now, kept in case a bare-link treatment is needed
-  // elsewhere); `settledShareLink` stays the tertiary text link.
+  // elsewhere). `flex: 1` (rugsui fix-spec §2, 2026-07-06) so this and
+  // `settledShareButton` sit as an even side-by-side pair per `settledLinks`
+  // below, instead of shrink-to-fit text sizes.
   settledChangeButton: {
     padding: '11px 20px',
     minHeight: 44, // matches the settled button family's touch-target floor
     boxSizing: 'border-box',
+    flex: 1,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -6740,16 +7145,33 @@ const styles: Record<string, CSSProperties> = {
     whiteSpace: 'nowrap',
     touchAction: 'manipulation',
   },
-  settledShareLink: {
-    background: 'transparent',
-    border: 'none',
-    padding: '6px 4px',
+  // "share" — PROMOTED from a bare transparent text link to a real
+  // outline/ghost button (rugsui fix-spec §2: "outline buttons on top of
+  // art also get the panel bg" — a transparent link disappears over bright
+  // gold-bar art). Same surface as `settledChangeButton` (panel bg +
+  // hairline border + 10px radius + 44px floor + `flex: 1`), only the text
+  // color stays the win-accent green so it still reads as the "share your
+  // result" action rather than a neutral secondary.
+  settledShareButton: {
+    padding: '11px 20px',
+    minHeight: 44,
+    boxSizing: 'border-box',
+    flex: 1,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(255,255,255,0.05)',
+    border: `1px solid ${T.borderDefault}`,
+    borderRadius: 10,
     fontFamily: T.fontMono,
     fontSize: 11,
+    fontWeight: 700,
     letterSpacing: '0.16em',
     textTransform: 'uppercase',
     color: T.accent,
     cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    touchAction: 'manipulation',
   },
   settledPointsValue: {
     color: T.textPrimary,
@@ -7105,48 +7527,32 @@ const styles: Record<string, CSSProperties> = {
     letterSpacing: '-0.02em',
     textShadow: '0 0 18px currentColor',
   },
-  // ── Near-board BET AGAIN (VaultBoardRebet) — reachability fix ────────────
-  // Sibling of heroOverlay (zIndex 12) inside boardRegion. zIndex 13 = above
-  // the hero moment, so it stays visible/tappable after the hero's own
-  // content fades at HERO_VISIBLE_MS. Wrapper is pointerEvents:'none' — only
-  // the button inside opts back in (see component comment).
-  boardRebetWrap: {
+  // ── Settled board caption (rugsui fix-spec §5) ───────────────────────────
+  // Replaces the removed near-board BET AGAIN (VaultBoardRebet) at this same
+  // bottom-of-board slot with a read-only pill strip. `rgba(12,17,14,.75)`
+  // mockup literal mapped to the vault dark-canvas token (`T.bgCanvas`
+  // #03070d family) for cross-scrim consistency. zIndex 13 matches the old
+  // slot (above VaultHeroOverlay's zIndex 12, so it stays visible once the
+  // hero moment fades at HERO_VISIBLE_MS).
+  settledBoardCaption: {
     position: 'absolute',
     left: '50%',
+    bottom: 16,
     transform: 'translateX(-50%)',
     zIndex: 13,
     pointerEvents: 'none',
-    display: 'flex',
-    justifyContent: 'center',
-  },
-  // DESKTOP: clears both the centered heroLabelStack above and the in-canvas
-  // drawBottomHint text at W/2,H-14 (pixel-measured ≈141-167px free gap on
-  // the D1440 reference — see AGENT_MEMORY.md "Near-board CTA composition
-  // spec" for the measurement method).
-  boardRebetWrapDesktop: {
-    bottom: 72,
-  },
-  // MOBILE: only ≈59-60px total free gap exists between heroLabelStack and
-  // drawBottomHint at 390px width — docking to the canvas floor and
-  // accepting occlusion of the fixed-pixel hint caption is the accepted
-  // trade-off (that caption duplicates the larger hero-pill text one region
-  // above it; see composition-designer's brief, 2026-07-02).
-  boardRebetWrapMobile: {
-    bottom: 6,
-  },
-  // Ledge / mounting plate — the SAME brushed-steel + gold-rivet-trim
-  // material as `settledPanel`/`controlPanel` (the one register that reads
-  // identically across a win AND a loss reference screenshot), so the CTA
-  // reads as vault furniture rather than an outcome-tinted overlay plopped
-  // over the scene. No cyan; green economy carried by the button inside.
-  boardRebetLedge: {
-    display: 'flex',
-    pointerEvents: 'none',
-    padding: 7,
-    borderRadius: 14,
-    background: 'linear-gradient(180deg, #1B2330 0%, #090F18 100%)',
-    border: '1px solid rgba(255,197,61,0.32)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 20px rgba(0,0,0,0.45)',
+    background: 'rgba(3,7,13,0.75)',
+    border: `1px solid ${T.borderDefault}`,
+    borderRadius: 999,
+    padding: '4px 14px',
+    fontFamily: T.fontMono,
+    fontSize: 11,
+    letterSpacing: '0.08em',
+    color: T.textMuted,
+    whiteSpace: 'nowrap',
+    maxWidth: '92%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   // ── Rhythm badge (cosmetic "perfect tumbler" celebration) ────────────────
   // Module-const amplitude. Two fixed tiers (rhythm / perfect); only color +
@@ -7600,7 +8006,12 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 700,
     letterSpacing: '0.2em',
     textTransform: 'uppercase',
-    color: T.textDim,
+    // FIX 3 (2026-07-07, consolidated fix pass) — was `T.textDim`; measured
+    // ~4.4-4.5:1 in SHITCOIN over the full-bleed backdrop, below the same
+    // AA floor already swept everywhere else in this file (2026-07-06
+    // WCAG re-audit, see the GUTTER-CARD SYSTEM comment above). `T.textMuted`
+    // clears AA with margin in all 3 worlds.
+    color: T.textMuted,
     whiteSpace: 'nowrap',
   },
   hudHeroBag: {
@@ -7617,7 +8028,10 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     fontWeight: 700,
     letterSpacing: '0.06em',
-    color: T.textDim,
+    // FIX 3 (2026-07-07, consolidated fix pass) — was `T.textDim`; the
+    // "RUGS · FIRST TAP" / "RUG RISK N%" captions measured borderline
+    // ~4.4-4.5:1 in SHITCOIN over the full-bleed backdrop. `T.textMuted`.
+    color: T.textMuted,
     whiteSpace: 'nowrap',
     flexShrink: 0,
   },

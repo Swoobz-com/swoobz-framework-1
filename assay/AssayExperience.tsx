@@ -211,6 +211,32 @@ const CARTOUCHE_BG = 'linear-gradient(160deg,#103042 0%,#0b2231 55%,#05121c 100%
 const CARTOUCHE_BG_SOLID = '#081b28'
 /** Concussion-ring diameter behind the hero cartouche (was a hard-coded 120). */
 const HERO_RING_SIZE_PX = 150
+/** CHANGE B — the hero "you won" moment now shows the WON AMOUNT big + gold.
+ *  Every type size here is a fixed module const (RG-C5): a 1.3x win and a 400x
+ *  win render this cartouche byte-identical — ONLY the number/multiplier text
+ *  differs, never the size, colour, timing, bloom or sound. */
+const HERO_AMOUNT_PX = 42
+const HERO_LABEL_PX = 15
+const HERO_MULT_PX = 19
+/** FIX 1 — the hero cartouche's vertical anchor within the board rect, per
+ *  viewport. DESKTOP (wide) keeps 38% (clears the in-board "LINE CLAIMED"
+ *  header strip by ~74px). On the narrow 412 viewport that same 38% lands ON
+ *  the header plaque and cuts it in half; the narrow anchor drops to the coin
+ *  band (59%) so the cartouche FULLY clears the header strip above AND the
+ *  settled receipt below AND stays inside the board edges. Fixed per viewport,
+ *  independent of payout magnitude (RG-C5). */
+const HERO_TOP_WIDE = '38%'
+const HERO_TOP_NARROW = '62%'
+/** FIX 3 — "SECURED THE HAUL" (16 chars) wrapped to 3 lines in the ~205px
+ *  cartouche at letterSpacing 2.5; the sun-glyph orphaned beside line 1. The
+ *  glyph now centers ABOVE the heading and the heading stays on ONE line
+ *  (nowrap) at a tightened tracking so the label block is ≤2 rows. Module
+ *  const (RG-C5). */
+const HERO_LABEL_LETTERSPACING = 1.5
+/** FIX 4 — a small "$" money marker before the won amount so the big number
+ *  reads unmistakably as MONEY, distinct from the "(N.NNx)" multiplier below
+ *  it. Sized as a fixed fraction of the amount (module const, RG-C5). */
+const HERO_CURRENCY_PX = 24
 /** One-shot carved-stone shine sweep across the cartouche, fires once with the
  *  pop-in. Fixed duration regardless of payout (RG-C5). */
 const CARTOUCHE_SHINE_MS = 620
@@ -492,6 +518,13 @@ const ASSAY_KEYFRAMES = `
   0%   { transform: rotate(-2.2deg); }
   100% { transform: rotate(2.2deg); }
 }
+/* INFO / HOW-TO-PLAY dialog entrance — a single fixed-duration fade+lift, gated
+   in JS on reducedMotion (so an AT/reduced-motion user gets the instant
+   end-state). RG-C5: fixed timing, identical every open, never streak/value keyed. */
+@keyframes assayDialogIn {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0)   scale(1);     }
+}
 @media (prefers-reduced-motion: reduce) {
   .assayAmbient * { animation: none !important; }
 }
@@ -526,11 +559,36 @@ function useIsWide(breakpointPx: number): boolean {
   return isWide
 }
 
+/** B2 (WCAG 2.2.2) — live `prefers-reduced-motion` state, mirroring `useIsWide`'s
+ *  matchMedia pattern with a change listener so an OS toggle mid-session takes
+ *  effect immediately. This is a USER ACCESSIBILITY PREFERENCE, not win-magnitude
+ *  or streak/session scaling — so gating juice on it leaves RG-C5 untouched (the
+ *  timings are still module consts; a given user simply sees motion or its
+ *  instant end-state, identically for a 1.3x and a 100x win). */
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = () => setReduced(mq.matches)
+    handler()
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+  return reduced
+}
+
 export function AssayExperience() {
   const c = useAssayController()
   const s = c.state
   const { phase } = s
   const isWide = useIsWide(WIDE_BREAKPOINT_PX)
+  // B2: honored by EVERY juice animation + the canvas bust FX (threaded to
+  // AssayGridCanvas). Reduced collapses motion to end-state; the win/loss SIGNAL
+  // (hero amount, cracked ducat + LINE BROKE) always still shows.
+  const reducedMotion = useReducedMotion()
   const showRail = phase.kind === 'planning' || phase.kind === 'assaying' || phase.kind === 'bad-vein'
   // Wide-viewport rail stays mounted one phase LONGER than the narrow
   // bottom-dock (`showRail`) — composition-designer finding, 2026-07-03:
@@ -563,7 +621,19 @@ export function AssayExperience() {
   const shellMaxWidthPx = Math.round(centerCardWidthPx + gutterWidthPx + RAIL_GAP_PX)
 
   const trailLen = phase.kind === 'planning' ? s.trail.length : s.committedTrail.length
-  const potentialBps = trailLen >= MIN_TRAIL ? coinLadderBps(Math.min(trailLen, MAX_TRAIL)) : ONE_X_BPS
+  // B3 (display-only) — the pre-commit "TO WIN" preview MUST use the active
+  // tier's safe-tile count, not the Standard default `coinLadderBps` silently
+  // falls back to; otherwise every tier showed Standard's multiplier pre-commit
+  // while settlement paid the real tier's value (Reef 8 read 1.35x but paid
+  // 1.24x, Hadal read 1.35x but paid 1.93x). The tier source mirrors `trailLen`:
+  // in PLANNING the preview follows the live `selectedTier`; a running round
+  // reads the FROZEN `committedTier` so the "target if line holds" ref matches
+  // the settlement math. No new math — same `coinLadderBps`, real tier threaded.
+  const previewTierId = phase.kind === 'planning' ? s.selectedTier : s.committedTier
+  const potentialBps =
+    trailLen >= MIN_TRAIL
+      ? coinLadderBps(Math.min(trailLen, MAX_TRAIL), TIERS[previewTierId].safeTiles)
+      : ONE_X_BPS
   const potentialPay = settlePayout(s.wagerLamports, potentialBps)
   const liveTally = tallyLamports(s.wagerLamports, s.tallyBps)
 
@@ -606,7 +676,14 @@ export function AssayExperience() {
       ? s.tallyBps
       : heroPhase === 'settled'
         ? outcome
-          ? outcome.finalMultiplierBps
+          ? // CHANGE A: a settled BUST collected nothing (bomb = whole-run void
+            // = 0), so the hero plaque's multiplier reads 0x beside the 0.00
+            // payout — never the phantom pre-bomb ladder value. A WIN keeps its
+            // claimed multiplier. Mirrors heroPay (0 on a bust) so the plaque
+            // stays internally consistent (display-only; no math touched).
+            outcome.won
+            ? outcome.finalMultiplierBps
+            : 0n
           : ONE_X_BPS
         : heroPhase === 'bust'
           ? 0n
@@ -640,6 +717,10 @@ export function AssayExperience() {
   // running tally of what already happened, it carries no board/bomb state.
   const sessionTilesClaimed = s.history.reduce((acc, row) => acc + row.revealedSafeCount, 0)
   const [showSafety, setShowSafety] = useState(false)
+  // INFO / HOW-TO-PLAY panel (display-only). `infoTriggerRef` holds the "?" pill
+  // so focus RETURNS to it on close (WCAG 2.4.3 / no focus dead-end).
+  const [showInfo, setShowInfo] = useState(false)
+  const infoTriggerRef = useRef<HTMLButtonElement>(null)
 
   // ── Coin-fly + tally-pulse juice state ────────────────────────────────────
   const tallyRef = useRef<HTMLDivElement | null>(null)
@@ -647,6 +728,11 @@ export function AssayExperience() {
   const [coinFlights, setCoinFlights] = useState<CoinFlight[]>([])
   const [tallyPulseKey, setTallyPulseKey] = useState(0)
   const pulseWrapRef = useRef<HTMLDivElement | null>(null)
+  // FIX 2 (display-only): the pending "landing" timeouts for each in-flight
+  // coin, tracked so a bad-vein crack can cancel the ones still airborne (both
+  // the coin img AND its would-be HAUL landing-pulse) without a coin landing
+  // after the bomb. Coins that already landed are gone from coinFlights.
+  const coinFlyLandTimeoutsRef = useRef<number[]>([])
 
   // ── "SECURED" hero-pop callout — fires once per fully-proven claim-line
   // (RG-C5: fixed hold time, no tier/streak scaling). Keyed on the outcome's
@@ -663,7 +749,15 @@ export function AssayExperience() {
         return () => window.clearTimeout(t)
       }
     } else {
+      // B1 (trust-critical, display-only) — a BUST (or any non-win outcome)
+      // that settles INSIDE a PRECEDING win's 1700ms hero-hold must never leave
+      // the stale WIN hero painted over it (reachable via SAME LINE / DIVE
+      // AGAIN fast-replay on instant pace). The win branch's effect-cleanup only
+      // CANCELS its pending reset timeout — it never re-arms it — so without an
+      // explicit clear here the flag stayed `true` over the bust. Belt-and-
+      // suspenders with the `outcome.won` render gate below.
       heroFiredKeyRef.current = null
+      setHeroPopVisible(false)
     }
     return undefined
   }, [outcome])
@@ -675,21 +769,44 @@ export function AssayExperience() {
     const to = { x: r.left + r.width / 2, y: r.top + r.height / 2 }
     const id = flightIdRef.current++
     setCoinFlights((f) => [...f, { id, from: { x: flight.x, y: flight.y }, to }])
-    window.setTimeout(() => {
+    const landId = window.setTimeout(() => {
       setCoinFlights((f) => f.filter((cf) => cf.id !== id))
       setTallyPulseKey((k) => k + 1)
+      coinFlyLandTimeoutsRef.current = coinFlyLandTimeoutsRef.current.filter((t) => t !== landId)
     }, COIN_FLY_MS)
+    coinFlyLandTimeoutsRef.current.push(landId)
   }, [])
+
+  // FIX 2 (display-only): mirror the instant pace at the STAGGERED bust moment.
+  // When the cascade cracks a ducat (phase → 'bad-vein'), cancel every coin
+  // still IN FLIGHT — remove the airborne img AND its pending HAUL landing-pulse
+  // — so none lands in the meter at/after the bomb. Coins that already landed
+  // during 'assaying' have left coinFlights and stand (the intended per-ducat
+  // collect suspense). Wins never enter 'bad-vein', so they are untouched.
+  useEffect(() => {
+    if (phase.kind === 'bad-vein') {
+      coinFlyLandTimeoutsRef.current.forEach((t) => window.clearTimeout(t))
+      coinFlyLandTimeoutsRef.current = []
+      setCoinFlights([])
+    }
+  }, [phase.kind])
 
   // Re-trigger the tally pulse CSS animation WITHOUT remounting the dial (so
   // the needle's own swing transition keeps running uninterrupted).
   useEffect(() => {
     const el = pulseWrapRef.current
     if (!el || tallyPulseKey === 0) return
+    // B2: no vestibular scale/brightness pulse under reduced-motion — the HAUL
+    // value itself still climbs (it reads off engine state), so the collect is
+    // still communicated, just without the animated punch.
+    if (reducedMotion) {
+      el.style.animation = 'none'
+      return
+    }
     el.style.animation = 'none'
     void el.offsetWidth // force reflow so the animation can restart
     el.style.animation = `assayTallyPulse ${TALLY_PULSE_MS}ms ease-out`
-  }, [tallyPulseKey])
+  }, [tallyPulseKey, reducedMotion])
 
   /** One-shot landing spark ring on the ASSAY TALLY dial, keyed so a fresh
    *  DOM node (and thus a fresh animation) mounts per real coin landing —
@@ -839,12 +956,12 @@ export function AssayExperience() {
       <RailRow title="HAUL" compact={!isWide}>
         <div ref={tallyRef}>
           <div ref={pulseWrapRef} style={{ position: 'relative' }}>
-            <TallyLandSpark />
+            {!reducedMotion && <TallyLandSpark />}
             {/* Mobile CRIT #1 fix: a smaller dial on narrow viewports (one of
                 several trims reclaiming the vertical budget RUN THE LINE
                 needs) — desktop keeps the full "lg" instrument, it isn't
                 fold-constrained the same way. */}
-            <TallyDial tallyBps={s.tallyBps} size={isWide ? 'lg' : 'sm'} shineKey={tallyPulseKey} />
+            <TallyDial tallyBps={s.tallyBps} size={isWide ? 'lg' : 'sm'} shineKey={tallyPulseKey} reducedMotion={reducedMotion} />
             <div
               style={{
                 fontFamily: FONT_MONO,
@@ -1084,7 +1201,9 @@ export function AssayExperience() {
               pointerEvents: 'none',
               zIndex: 1,
               background: 'radial-gradient(ellipse at 100% 0%, rgba(230,241,245,0.07), rgba(230,241,245,0) 70%)',
-              animation: `assayLampBreathe ${LAMP_BREATHE_MS}ms ease-in-out infinite alternate`,
+              // B2: the ambient lamp breathe freezes to a steady glow under
+              // reduced-motion (the light stays, its <=0.06Hz sway stops).
+              animation: reducedMotion ? 'none' : `assayLampBreathe ${LAMP_BREATHE_MS}ms ease-in-out infinite alternate`,
             }}
           />
           {/* Brass corner brackets — the "bound ledger/counter" read: this is
@@ -1275,12 +1394,13 @@ export function AssayExperience() {
                 interactive={phase.kind === 'planning'}
                 onCoinFly={handleCoinFly}
                 desktopSizePx={isWide ? desktopBoardPx : undefined}
+                reducedMotion={reducedMotion}
               />
               {/* Board bloom sweep — a one-shot diagonal light pass across
                   the board on a winning settle, synced with the canvas's own
                   gold bloom-ring. Fixed timing regardless of payout size
                   (RG-C5). */}
-              {heroPopVisible && <BoardSweep />}
+              {heroPopVisible && !reducedMotion && <BoardSweep />}
             </div>
 
             {/* Coin-fly readout during the cascade (cause→effect juice).
@@ -1324,7 +1444,9 @@ export function AssayExperience() {
             {/* "LINE CLAIMED" hero-pop — fires once on any fully-claimed
                 line, gold register, fixed timing regardless of
                 payout size. */}
-            {heroPopVisible && <HeroPopCallout />}
+            {heroPopVisible && outcome && outcome.won && (
+              <HeroPopCallout payoutLamports={outcome.payoutLamports} multiplierBps={outcome.finalMultiplierBps} isWide={isWide} reducedMotion={reducedMotion} />
+            )}
           </div>
 
           {/* ── Lobby overlay (narrow only) ── on wide the SAME content renders
@@ -1499,8 +1621,14 @@ export function AssayExperience() {
                   <div
                     style={{
                       fontFamily: FONT_MONO,
-                      fontSize: 20,
+                      // CHANGE B — the persistent WON record, enlarged 20→25px so
+                      // it's clearly legible after the hero callout fades. Fixed
+                      // size regardless of payout magnitude (RG-C5). Wins carry
+                      // the gold money glow; a bust reads a quiet SAND 0.00.
+                      fontSize: 25,
+                      fontWeight: outcome.won ? 800 : 600,
                       color: outcome.won ? ACCENT_NUM : SAND,
+                      textShadow: outcome.won ? '0 0 14px rgba(240,181,66,0.5)' : 'none',
                     }}
                   >
                     {formatUsdc(outcome.payoutLamports)}
@@ -1725,10 +1853,14 @@ export function AssayExperience() {
         </div>
       </div>
 
-      {/* Coin-fly overlay — page-fixed, travels from the struck ducat to the HAUL dial. */}
-      {coinFlights.map((f) => (
-        <CoinFly key={f.id} from={f.from} to={f.to} />
-      ))}
+      {/* Coin-fly overlay — page-fixed, travels from the struck ducat to the HAUL dial.
+          B2: skipped under reduced-motion (the airborne travel is pure vestibular
+          motion); the HAUL value still climbs on each landing (its timeout still
+          fires), so the collect is communicated without the flight. */}
+      {!reducedMotion &&
+        coinFlights.map((f) => (
+          <CoinFly key={f.id} from={f.from} to={f.to} />
+        ))}
 
       {/* PLAY SAFE — page-level `position:fixed` pill (mobile CRIT #2 fix,
           orchestrator 2026-07-04: measured scrolling off-screen, top:-195,
@@ -1737,6 +1869,27 @@ export function AssayExperience() {
           scroll position, in every phase — a sibling of the coin-fly
           overlay/SafetyPanel here rather than a header-row child. */}
       <SafetyLink onClick={() => setShowSafety(true)} />
+
+      {/* INFO / HOW-TO-PLAY — a page-fixed "?" pill pinned just left of PLAY SAFE
+          in the same top-right chrome cluster, same material grammar. Opens the
+          calm, informational rules dialog (loop / depths / pace / HAUL+TO WIN /
+          fairness). Reachable in every phase, independent of scroll. */}
+      <InfoLink
+        buttonRef={infoTriggerRef}
+        onClick={() => setShowInfo(true)}
+      />
+
+      {showInfo && (
+        <AbyssInfoPanel
+          reducedMotion={reducedMotion}
+          onClose={() => {
+            setShowInfo(false)
+            // WCAG 2.4.3 — return focus to the trigger (the trigger stays
+            // mounted, so the ref is live immediately after the panel unmounts).
+            infoTriggerRef.current?.focus()
+          }}
+        />
+      )}
 
       {showSafety && (
         <SafetyPanel
@@ -2088,6 +2241,326 @@ function SafetyPanel({
   )
 }
 
+/** INFO / HOW-TO-PLAY trigger — a page-fixed "?" pill in the top-right chrome
+ *  cluster, pinned just left of the PLAY SAFE pill (same opaque steel material,
+ *  same 44px touch floor, same boxShadow). Real `<button>`, keyboard-reachable,
+ *  gold `:focus-visible` ring via `.assayFocusable`. `buttonRef` lets the parent
+ *  return focus here when the dialog closes (WCAG 2.4.3, no focus dead-end). */
+function InfoLink({
+  onClick,
+  buttonRef,
+}: {
+  onClick: () => void
+  buttonRef: React.RefObject<HTMLButtonElement>
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      onClick={onClick}
+      className="assayFocusable"
+      style={{
+        position: 'fixed',
+        top: 8,
+        // Left of PLAY SAFE (right:8, ~90px wide) in the same corner cluster —
+        // the fixed-text pill never grows, so this offset never overlaps it
+        // (verified live desktop 1440 + mobile 412).
+        right: 106,
+        zIndex: 90,
+        background: 'rgba(16,26,36,0.88)',
+        border: `1px solid ${BRASS_DARK}`,
+        borderRadius: 8,
+        minHeight: 44,
+        minWidth: 44,
+        boxSizing: 'border-box',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: FONT_MONO,
+        fontSize: 18,
+        fontWeight: 700,
+        lineHeight: 1,
+        color: SAND,
+        cursor: 'pointer',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        touchAction: 'manipulation',
+      }}
+      aria-haspopup="dialog"
+      aria-label="How to play · Abyss Line game info"
+    >
+      ?
+    </button>
+  )
+}
+
+/** INFO / HOW-TO-PLAY dialog — the calm, purely-informational rules panel
+ *  (RG-C5: no urging/chasing/celebration; states the loop, the depth floors, the
+ *  reveal pace, the HAUL + TO WIN read, and the provably-fair receipt). Every
+ *  number is pulled LIVE from the math module (`MIN_TRAIL`/`MAX_TRAIL`, per-tier
+ *  `bombCount`, `TIER_MAX_MULTIPLE_BPS` via `formatMultiplier`, `TARGET_RTP_BPS`)
+ *  so it is always tier-correct and matches the DIVE DEPTH selector byte-for-byte.
+ *
+ *  A11y: real `role="dialog"` + `aria-modal` + `aria-labelledby`; focus moves to
+ *  the Close control on open and RETURNS to the trigger on close; Esc AND both
+ *  Close controls dismiss; Tab is contained within the dialog (never a dead-end,
+ *  never lands on the background board); gold `:focus-visible` rings; the entrance
+ *  fade+lift is skipped under reduced-motion. */
+function AbyssInfoPanel({
+  reducedMotion,
+  onClose,
+}: {
+  reducedMotion: boolean
+  onClose: () => void
+}) {
+  const cardRef = useRef<HTMLDivElement>(null)
+  const closeBtnRef = useRef<HTMLButtonElement>(null)
+  const titleId = 'abyss-info-title'
+
+  // Focus into the panel on open.
+  useEffect(() => {
+    closeBtnRef.current?.focus()
+  }, [])
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      onClose()
+      return
+    }
+    if (e.key !== 'Tab') return
+    // Contain focus inside the dialog (aria-modal) — Tab always cycles between
+    // the dialog's own focusable controls, so it never reaches the board behind
+    // and there is never a dead-end.
+    const root = cardRef.current
+    if (!root) return
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>('button, a[href], [tabindex]:not([tabindex="-1"])'),
+    ).filter((el) => !el.hasAttribute('disabled'))
+    if (focusables.length === 0) return
+    const first = focusables[0]!
+    const last = focusables[focusables.length - 1]!
+    const active = document.activeElement as HTMLElement | null
+    if (e.shiftKey && active === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+
+  // Shared styles for the two close affordances (top "×" + bottom CLOSE).
+  const eyebrow: React.CSSProperties = {
+    fontFamily: FONT_MONO,
+    fontSize: 10.5,
+    letterSpacing: 1.5,
+    // Section headers use BONE (matches the sibling PLAY SAFE dialog). The Abyss
+    // rule-of-three reserves cyan (PLAYER_TEXT) for player-action terms only;
+    // a section header (incl. the VALUE header "HAUL / TO WIN") is never player.
+    color: BONE,
+    margin: '0 0 5px',
+  }
+  const prose: React.CSSProperties = {
+    fontSize: 12,
+    lineHeight: 1.62,
+    color: BONE,
+    margin: 0,
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      onKeyDown={onKeyDown}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(3,9,15,0.72)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        zIndex: 110,
+      }}
+    >
+      <div
+        ref={cardRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="assayBoardScroll"
+        style={{
+          width: '100%',
+          maxWidth: 384,
+          maxHeight: '86vh',
+          overflowY: 'auto',
+          background: CARD_BG,
+          border: `1px solid ${BRASS_DARK}`,
+          borderRadius: 14,
+          padding: '18px 18px 16px',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
+          fontFamily: '"Geist", system-ui, sans-serif',
+          animation: reducedMotion ? 'none' : 'assayDialogIn 220ms cubic-bezier(0.3,0.7,0.3,1)',
+        }}
+      >
+        {/* Header row — title + a top "×" close (first focusable, gets focus on open). */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+          <div>
+            <div
+              id={titleId}
+              style={{ fontFamily: FONT_MONO, fontSize: 13, letterSpacing: 2, color: BONE }}
+            >
+              HOW TO PLAY
+            </div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 10.5, letterSpacing: 1.5, color: GOLD, marginTop: 3 }}>
+              ABYSS LINE
+            </div>
+          </div>
+          <button
+            ref={closeBtnRef}
+            type="button"
+            onClick={onClose}
+            className="assayFocusable"
+            aria-label="Close how to play"
+            style={{
+              flexShrink: 0,
+              width: 44,
+              height: 44,
+              boxSizing: 'border-box',
+              borderRadius: 8,
+              border: `1px solid ${BRASS_MID}`,
+              background: BRASS_BTN_DIM,
+              color: BONE,
+              fontFamily: FONT_MONO,
+              fontSize: 18,
+              lineHeight: 1,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              touchAction: 'manipulation',
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* 1 · THE DIVE (core loop) */}
+        <section style={{ marginBottom: 13 }}>
+          <p style={eyebrow}>THE DIVE</p>
+          <p style={prose}>
+            The sub lights a board of gold ducats. Plot your{' '}
+            <span style={{ color: PLAYER_TEXT, fontWeight: 600 }}>CLAIM LINE</span> by tapping{' '}
+            <span style={{ fontFamily: FONT_MONO, color: GOLD }}>{MIN_TRAIL}</span> to{' '}
+            <span style={{ fontFamily: FONT_MONO, color: GOLD }}>{MAX_TRAIL}</span> ducats · they need
+            not connect, pick freely. Then{' '}
+            <span style={{ color: PLAYER_TEXT, fontWeight: 600 }}>RUN THE LINE</span> to commit. On
+            reveal, every safe ducat loads gold into the HAUL, but a cracked ducat (a{' '}
+            <span style={{ color: BLOOD, fontWeight: 600 }}>sea-mine</span>){' '}
+            <span style={{ color: BLOOD, fontWeight: 600 }}>busts</span> the whole run. Prove the full
+            line and it cashes out.
+          </p>
+        </section>
+
+        {/* 2 · DIVE DEPTH — the three depth floors (tier-correct, matches the selector) */}
+        <section style={{ marginBottom: 13 }}>
+          <p style={eyebrow}>DIVE DEPTH · DEPTH FLOORS</p>
+          <div
+            style={{
+              border: `1px solid ${BRASS_MID}`,
+              borderRadius: 9,
+              padding: '8px 10px',
+              background: 'rgba(3,9,15,0.4)',
+            }}
+          >
+            {TIER_ORDER.map((tier, i) => (
+              <div
+                key={tier}
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  padding: '4px 0',
+                  borderTop: i === 0 ? undefined : `1px solid ${HAIRLINE}`,
+                }}
+              >
+                <span style={{ fontFamily: FONT_MONO, fontSize: 11.5, color: BONE }}>
+                  {TIER_DISPLAY_LABEL[tier]}
+                </span>
+                <span style={{ fontFamily: FONT_MONO, fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                  <span style={{ color: BONE }}>{TIERS[tier].bombCount} mines</span>
+                  <span style={{ color: BONE }}> · </span>
+                  <span style={{ color: GOLD }}>up to {formatMultiplier(TIER_MAX_MULTIPLE_BPS[tier])}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <p style={{ ...prose, marginTop: 8 }}>
+            More mines means more risk and a higher top multiplier. The return to player holds at{' '}
+            <span style={{ fontFamily: FONT_MONO, letterSpacing: 0, color: GOLD }}>{formatRtpPct(TARGET_RTP_BPS)}</span> on every depth.
+          </p>
+        </section>
+
+        {/* 3 · REVEAL PACE */}
+        <section style={{ marginBottom: 13 }}>
+          <p style={eyebrow}>REVEAL PACE</p>
+          <p style={prose}>
+            <span style={{ fontFamily: FONT_MONO, color: BONE }}>INSTANT</span> reveals the whole line
+            at once. <span style={{ fontFamily: FONT_MONO, color: BONE }}>DUCAT-BY-DUCAT</span> walks
+            it one ducat at a time. Same odds · only the pacing changes.
+          </p>
+        </section>
+
+        {/* 4 · HAUL + TO WIN */}
+        <section style={{ marginBottom: 13 }}>
+          <p style={eyebrow}>HAUL · TO WIN</p>
+          <p style={prose}>
+            The <span style={{ color: GOLD, fontWeight: 600 }}>HAUL</span> gauge fills as the line
+            runs, loading gold with each safe ducat. <span style={{ color: GOLD, fontWeight: 600 }}>TO
+            WIN</span> shows what a fully-proven line pays at your currently selected depth.
+          </p>
+        </section>
+
+        {/* 5 · PROVABLY FAIR + safety */}
+        <section style={{ marginBottom: 15 }}>
+          <p style={eyebrow}>PROVABLY FAIR</p>
+          <p style={prose}>
+            Every dive is provably fair. The Glass Box receipt on the settled screen shows the seed,
+            hash, and round, so anyone can re-check the exact round was not rigged. Return to player is
+            about <span style={{ fontFamily: FONT_MONO, letterSpacing: 0, color: GOLD }}>{formatRtpPct(TARGET_RTP_BPS)}</span> on every depth.
+            For deposit and time limits and session controls, open{' '}
+            <span style={{ fontFamily: FONT_MONO, color: BONE }}>PLAY SAFE</span>.
+          </p>
+        </section>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="assayFocusable"
+          style={{
+            width: '100%',
+            minHeight: 44,
+            boxSizing: 'border-box',
+            borderRadius: 8,
+            border: `1px solid ${BRASS_MID}`,
+            background: BRASS_BTN_DIM,
+            color: BONE,
+            fontFamily: FONT_MONO,
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: 0.5,
+            cursor: 'pointer',
+            touchAction: 'manipulation',
+          }}
+        >
+          CLOSE
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /** The ASSAY TALLY balance-dial: a PREMIUM meter (casino-AAA revise pass,
  *  P1-F + P0-A — artotty/AGENT_MEMORY flagged the old dial as "a flat thin
  *  line," and this consolidation is also where the removed in-canvas
@@ -2109,10 +2582,12 @@ function TallyDial({
   tallyBps,
   size = 'sm',
   shineKey = 0,
+  reducedMotion = false,
 }: {
   tallyBps: bigint
   size?: 'sm' | 'lg'
   shineKey?: number
+  reducedMotion?: boolean
 }) {
   const clamped = tallyBps > TALLY_MAX_REF_BPS ? TALLY_MAX_REF_BPS : tallyBps < 0n ? 0n : tallyBps
   const frac = Number(clamped) / Number(TALLY_MAX_REF_BPS)
@@ -2226,7 +2701,9 @@ function TallyDial({
             transformOrigin: '50px 50px',
             transform: `rotate(${angleDeg}deg)`,
             transition: `transform ${TALLY_SWING_MS}ms cubic-bezier(0.34,1.4,0.4,1)`,
-            animation: isLive ? `assayNeedlePulse ${1000 / TALLY_NEEDLE_PULSE_HZ}ms ease-in-out infinite` : 'none',
+            // B2: the standing needle-glow breathe stops under reduced-motion —
+            // the needle still points at the live reading, just without the pulse.
+            animation: isLive && !reducedMotion ? `assayNeedlePulse ${1000 / TALLY_NEEDLE_PULSE_HZ}ms ease-in-out infinite` : 'none',
           }}
         />
         <circle cx={50} cy={50} r={4} fill={GOLD} stroke={BRASS_LO} strokeWidth={1} />
@@ -2234,7 +2711,7 @@ function TallyDial({
       {/* One-shot shine sweep — fired 1:1 with a real coin landing (never a
           decorative idle loop). Keyed so a fresh DOM node (and thus a fresh
           animation) mounts per landing, self-cleans by ending at opacity 0. */}
-      {shineKey !== 0 && (
+      {shineKey !== 0 && !reducedMotion && (
         <div
           key={shineKey}
           aria-hidden
@@ -3120,40 +3597,61 @@ const SUN_BADGE_BOSS_R = 12 * SUN_GLYPH_BOSS_RATIO
  *  (gold-rimmed pill, parchment text). Purely decorative reinforcement; the
  *  settlement panel's "LINE CLAIMED" heading already carries the accessible
  *  state announcement. */
-function HeroPopCallout() {
+function HeroPopCallout(props: { payoutLamports: bigint; multiplierBps: bigint; isWide: boolean; reducedMotion?: boolean }) {
+  const reducedMotion = props.reducedMotion === true
   return (
-    <div aria-hidden style={{ position: 'absolute', top: '38%', left: '50%', zIndex: 20, pointerEvents: 'none' }}>
+    <div
+      aria-hidden
+      style={{
+        position: 'absolute',
+        // FIX 1 — narrow viewport drops the anchor to the coin band so the
+        // cartouche fully clears the in-board header plaque above it (which
+        // 38% bisected on 412) and the settled receipt below.
+        top: props.isWide ? HERO_TOP_WIDE : HERO_TOP_NARROW,
+        left: '50%',
+        zIndex: 20,
+        pointerEvents: 'none',
+      }}
+    >
       {/* Double concussion-ring echo — two identical rings, the second
-          delayed by a fixed offset, both fixed duration (RG-C5). */}
-      <span
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: HERO_RING_SIZE_PX,
-          height: HERO_RING_SIZE_PX,
-          marginLeft: -HERO_RING_SIZE_PX / 2,
-          marginTop: -HERO_RING_SIZE_PX / 2,
-          borderRadius: '50%',
-          border: '1.5px solid rgba(240,181,66,0.55)',
-          animation: `assayHeroRing ${HERO_RING_MS}ms ease-out forwards`,
-        }}
-      />
-      <span
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: HERO_RING_SIZE_PX,
-          height: HERO_RING_SIZE_PX,
-          marginLeft: -HERO_RING_SIZE_PX / 2,
-          marginTop: -HERO_RING_SIZE_PX / 2,
-          borderRadius: '50%',
-          border: '1.5px solid rgba(240,181,66,0.4)',
-          animation: `assayHeroRing ${HERO_RING_MS}ms ease-out ${HERO_RING_2_DELAY_MS}ms forwards`,
-          opacity: 0,
-        }}
-      />
+          delayed by a fixed offset, both fixed duration (RG-C5). B2: the rings
+          are a pure decorative shockwave echo whose end-state is opacity 0
+          (gone) — under reduced-motion they collapse to that end-state, i.e.
+          are not rendered. The hero cartouche + amount below still carries the
+          full win signal. */}
+      {!reducedMotion && (
+        <>
+          <span
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: HERO_RING_SIZE_PX,
+              height: HERO_RING_SIZE_PX,
+              marginLeft: -HERO_RING_SIZE_PX / 2,
+              marginTop: -HERO_RING_SIZE_PX / 2,
+              borderRadius: '50%',
+              border: '1.5px solid rgba(240,181,66,0.55)',
+              animation: `assayHeroRing ${HERO_RING_MS}ms ease-out forwards`,
+            }}
+          />
+          <span
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: HERO_RING_SIZE_PX,
+              height: HERO_RING_SIZE_PX,
+              marginLeft: -HERO_RING_SIZE_PX / 2,
+              marginTop: -HERO_RING_SIZE_PX / 2,
+              borderRadius: '50%',
+              border: '1.5px solid rgba(240,181,66,0.4)',
+              animation: `assayHeroRing ${HERO_RING_MS}ms ease-out ${HERO_RING_2_DELAY_MS}ms forwards`,
+              opacity: 0,
+            }}
+          />
+        </>
+      )}
       {/* AXIS 4 — the callout is now a gold-bordered DEEP-WATER CARTOUCHE (spec
           §AXIS4), not a dark toast pill: the main-card CARD_BG material, a
           double brass bevel, a scaled-up badge, goldLight text, and a one-shot
@@ -3164,10 +3662,16 @@ function HeroPopCallout() {
           position: 'absolute',
           top: 0,
           left: 0,
+          // CHANGE B — a vertical stack: the win label row on top, the WON
+          // AMOUNT big + gold in the middle, the multiplier below. Centered on
+          // the wrapper's 50%/38% point by the assayHeroPop transform
+          // (translate(-50%,-50%), forwards). Fixed layout regardless of value.
           display: 'flex',
+          flexDirection: 'column',
           alignItems: 'center',
-          gap: 12,
-          padding: '22px 46px',
+          textAlign: 'center',
+          gap: 6,
+          padding: '18px 44px',
           // Elongated stadium cartouche.
           borderRadius: '40px / 32px',
           // B3 — FULLY OPAQUE deep-water body (solid color under the
@@ -3180,48 +3684,114 @@ function HeroPopCallout() {
           // outer gold bloom + drop shadow.
           boxShadow: `inset 0 2px 0 rgba(245,217,138,0.28), inset 0 0 0 5px ${STONE_DEEP}, inset 0 0 0 7px ${GOLD_DARK}, inset 0 0 26px rgba(0,0,0,0.55), 0 0 42px rgba(240,181,66,0.5), 0 14px 34px rgba(0,0,0,0.6)`,
           overflow: 'hidden',
-          animation: `assayHeroPop ${HERO_POP_HOLD_MS}ms ease-out forwards`,
+          // B2 CRITICAL UX: the win hero must STILL APPEAR under reduced-motion
+          // (the amount is the win signal). The centering translate(-50%,-50%)
+          // lives ONLY in the assayHeroPop keyframes, so when we drop the
+          // animation we apply the settled end-state statically — centered,
+          // full opacity, no scale-pop — so the cartouche paints in place
+          // without the vestibular pop-in. (The parent still unmounts it on
+          // HERO_POP_HOLD_MS, so the hold duration is unchanged.)
+          ...(reducedMotion
+            ? { animation: 'none', transform: 'translate(-50%,-50%)', opacity: 1 }
+            : { animation: `assayHeroPop ${HERO_POP_HOLD_MS}ms ease-out forwards` }),
         }}
       >
-        {/* Sun-disc provenance device — renders `AssayGridCanvas`'s shared
-            `sunGlyphPoints` geometry (the exact 8-ray Aztec sun-disc struck
-            into every coin) as an SVG polygon, so "proven" reads as ONE
-            consistent glyph across board coins, this badge and the certificate
-            seal — not a generic checkmark or diamond. Scaled up 22→28px. */}
-        <svg width={28} height={28} viewBox="0 0 32 32" aria-hidden style={{ flexShrink: 0, position: 'relative' }}>
-          <polygon points={SUN_BADGE_PTS} fill="none" stroke="rgba(3,9,15,0.5)" strokeWidth={1.8} strokeLinejoin="round" />
-          <polygon points={SUN_BADGE_PTS} fill={GOLD} opacity={0.16} />
-          <polygon points={SUN_BADGE_PTS} fill="none" stroke={GOLD} strokeWidth={0.9} strokeLinejoin="round" opacity={0.9} />
-          <circle cx={16} cy={16} r={SUN_BADGE_BOSS_R} fill={GOLD} opacity={0.16} />
-          <circle cx={16} cy={16} r={SUN_BADGE_BOSS_R} fill="none" stroke={GOLD} strokeWidth={0.9} opacity={0.9} />
-        </svg>
+        {/* Label row — sun-disc provenance device + the win heading. The glyph
+            renders `AssayGridCanvas`'s shared `sunGlyphPoints` geometry (the
+            exact 8-ray Aztec sun-disc struck into every coin) as an SVG polygon,
+            so "proven" reads as ONE consistent glyph across board coins, this
+            badge and the certificate seal — not a generic checkmark. The heading
+            copy is "SECURED THE HAUL" to match the settled-receipt heading
+            (AssayExperience L1489) so the hero and the record read the same. */}
+        {/* FIX 3 — the sun-glyph is centered ABOVE the heading (was beside it,
+            which orphaned the glyph and forced the 16-char label to wrap to 3
+            lines in the ~205px cartouche). The heading now stays on ONE line
+            (nowrap) at a tightened tracking, so the label block is ≤2 rows. */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, position: 'relative' }}>
+          <svg width={22} height={22} viewBox="0 0 32 32" aria-hidden style={{ flexShrink: 0 }}>
+            <polygon points={SUN_BADGE_PTS} fill="none" stroke="rgba(3,9,15,0.5)" strokeWidth={1.8} strokeLinejoin="round" />
+            <polygon points={SUN_BADGE_PTS} fill={GOLD} opacity={0.16} />
+            <polygon points={SUN_BADGE_PTS} fill="none" stroke={GOLD} strokeWidth={0.9} strokeLinejoin="round" opacity={0.9} />
+            <circle cx={16} cy={16} r={SUN_BADGE_BOSS_R} fill={GOLD} opacity={0.16} />
+            <circle cx={16} cy={16} r={SUN_BADGE_BOSS_R} fill="none" stroke={GOLD} strokeWidth={0.9} opacity={0.9} />
+          </svg>
+          <span
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: HERO_LABEL_PX,
+              fontWeight: 800,
+              letterSpacing: HERO_LABEL_LETTERSPACING,
+              color: GOLD_LIGHT,
+              textShadow: '0 1px 1px rgba(3,9,15,0.7), 0 0 12px rgba(245,217,138,0.7)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            SECURED THE HAUL
+          </span>
+        </div>
+        {/* WON AMOUNT — the primary "you won $X" read: big, gold money colour
+            (never teal), fixed size (HERO_AMOUNT_PX) regardless of magnitude. */}
         <span
           style={{
             fontFamily: FONT_MONO,
-            fontSize: 24,
+            fontSize: HERO_AMOUNT_PX,
             fontWeight: 800,
-            letterSpacing: 4,
-            // B3 — bright goldLight hero text with the gold glow (plus a dark
-            // edge for a crisp read on the opaque stone).
+            lineHeight: 1,
+            letterSpacing: 0.5,
             color: GOLD_LIGHT,
-            textShadow: '0 1px 1px rgba(3,9,15,0.7), 0 0 16px rgba(245,217,138,0.85), 0 0 30px rgba(240,181,66,0.6)',
+            textShadow: '0 1px 2px rgba(3,9,15,0.8), 0 0 20px rgba(245,217,138,0.9), 0 0 38px rgba(240,181,66,0.65)',
+            position: 'relative',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {/* FIX 4 — a small gold "$" marker so the big number is unmistakably
+              MONEY (the won amount), distinct from the "(N.NNx)" multiplier
+              below. formatUsdc carries no marker anywhere in the UI, so the
+              hero adds one here where amount + multiplier sit stacked. */}
+          <span
+            style={{
+              fontSize: HERO_CURRENCY_PX,
+              fontWeight: 700,
+              color: GOLD,
+              opacity: 0.92,
+              marginRight: 3,
+              verticalAlign: 'baseline',
+            }}
+          >
+            $
+          </span>
+          {formatUsdc(props.payoutLamports)}
+        </span>
+        {/* Multiplier — the "(Nx)" that tells the player HOW MUCH the line paid. */}
+        <span
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: HERO_MULT_PX,
+            fontWeight: 700,
+            letterSpacing: 2,
+            color: GOLD,
+            textShadow: '0 1px 1px rgba(3,9,15,0.7), 0 0 12px rgba(240,181,66,0.5)',
             position: 'relative',
           }}
         >
-          LINE CLAIMED
+          {formatMultiplier(props.multiplierBps)}
         </span>
-        {/* One-shot carved-stone shine sweep — fires once with the pop-in. */}
-        <span
-          aria-hidden
-          style={{
-            position: 'absolute',
-            inset: 0,
-            pointerEvents: 'none',
-            background:
-              'linear-gradient(100deg, transparent 30%, rgba(230,241,245,0.5) 48%, rgba(240,181,66,0.35) 52%, transparent 70%)',
-            animation: `assayCartoucheShine ${CARTOUCHE_SHINE_MS}ms ease-out forwards`,
-          }}
-        />
+        {/* One-shot carved-stone shine sweep — fires once with the pop-in.
+            B2: a decorative moving highlight (end-state opacity 0), skipped
+            under reduced-motion so no bar sweeps across the static cartouche. */}
+        {!reducedMotion && (
+          <span
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              background:
+                'linear-gradient(100deg, transparent 30%, rgba(230,241,245,0.5) 48%, rgba(240,181,66,0.35) 52%, transparent 70%)',
+              animation: `assayCartoucheShine ${CARTOUCHE_SHINE_MS}ms ease-out forwards`,
+            }}
+          />
+        )}
       </div>
     </div>
   )

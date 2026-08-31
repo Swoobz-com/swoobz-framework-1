@@ -252,6 +252,12 @@ export interface AssayGridCanvasProps {
    *  computed by the parent from the viewport-height clamp. When omitted,
    *  the board runs in mobile pan-only mode at a fixed tile size. */
   desktopSizePx?: number
+  /** B2 (WCAG 2.2.2): when true, the time-based bust FX (grid shake, blood
+   *  flash, bloom ring, shard scatter, travelling spark) collapse to their
+   *  instant END-STATE — no motion. The STATIC bust read (cracked ducat +
+   *  focus vignette, baked into the board) is unaffected, so a bust still
+   *  clearly communicates. Fed live from the parent's `matchMedia` listener. */
+  reducedMotion?: boolean
 }
 
 /** Tiny deterministic PRNG (mulberry32) — used for the board grain streaks,
@@ -584,6 +590,7 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
     interactive,
     onCoinFly,
     desktopSizePx,
+    reducedMotion = false,
   } = props
   const isDesktop = desktopSizePx != null
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -749,7 +756,15 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
       added.forEach((tileIdx) => popRef.current.set(tileIdx, popStart))
 
       const canvas = canvasRef.current
-      if (canvas && onCoinFly) {
+      // CHANGE A: a coin only flies to the HAUL meter for a safe tile collected
+      // while the run is STILL ALIVE (phase 'assaying'). On an INSTANT bust the
+      // pre-bomb `revealedSafe` batch and the phase flip to 'bad-vein' land in
+      // ONE setState, so this effect's render sees phase.kind === 'bad-vein' and
+      // launches ZERO flies. STAGGERED reveals happen tile-by-tile during
+      // 'assaying' (the bomb tile is never added to revealedSafe), so its
+      // pre-bomb flies are untouched; both WIN paths keep phase 'assaying' when
+      // revealedSafe grows, so wins still fly. (phase is a live prop, read here.)
+      if (canvas && onCoinFly && phase.kind === 'assaying') {
         const rect = canvas.getBoundingClientRect()
         // Clamp the flight's launch point to the VISIBLE viewport (the
         // scroll window on mobile; the canvas itself on desktop, where the
@@ -792,6 +807,15 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
   // coin-scatter arcs, all originating from the vein tile.
   useEffect(() => {
     if (phase.kind === 'bad-vein') {
+      // FIX 2 (display-only): the instant a ducat cracks, cancel any STILL-
+      // PENDING staggered coin-fly LAUNCHES so no coin flies to the HAUL meter
+      // after the bomb. Pre-bomb coins that already launched during 'assaying'
+      // are the intended ducat-by-ducat collect suspense and are untouched here
+      // (the HUD cancels the ones still airborne). Mirrors the instant pace,
+      // which launches ZERO flies because its bomb reveal never grows
+      // revealedSafe. No math — coin-flies are pure presentation.
+      coinFlyTimeoutsRef.current.forEach((t) => window.clearTimeout(t))
+      coinFlyTimeoutsRef.current = []
       const now = performance.now()
       veinEnterRef.current = now
       if (veinTileIdx != null) {
@@ -1339,7 +1363,9 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
 
     // Bounded, one-shot bust shake — decays to 0 well inside the settle hold.
     // Applied at composite time so it jitters the cached board without a rebuild.
-    if (phase.kind === 'bad-vein' && veinEnterRef.current != null) {
+    // B2: end-state of the shake is zero offset (board settled), so under
+    // reduced-motion we simply never apply the jitter translate.
+    if (!reducedMotion && phase.kind === 'bad-vein' && veinEnterRef.current != null) {
       const elapsed = performance.now() - veinEnterRef.current
       if (elapsed < BUST_SHAKE_MS) {
         const decay = 1 - elapsed / BUST_SHAKE_MS
@@ -1575,7 +1601,9 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
     // is offset from that tile's CENTER out to its EDGE (halfway to `to`) so
     // this transient arc never crosses the disc body, keeping the struck
     // doubloon as the one static hero pixel on the tile.
-    if (sparkRef.current && phase.kind === 'assaying') {
+    // B2: the travelling reveal-spark is pure in-flight motion; its end-state is
+    // "arrived" (nothing drawn), so under reduced-motion it is skipped entirely.
+    if (!reducedMotion && sparkRef.current && phase.kind === 'assaying') {
       const { from, to, start, jitters } = sparkRef.current
       const t = Math.min(1, (performance.now() - start) / SPARK_TRAVEL_MS)
       if (t < 1) {
@@ -1628,7 +1656,9 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
     // last-struck disc, gold; loss: the vein tile, ember), one-shot, fixed
     // duration (RG-C5: never scaled by the
     // payout size).
-    if (ringRef.current) {
+    // B2: the concussion ring's end-state is fully expanded + faded (opacity 0),
+    // i.e. gone, so under reduced-motion it is skipped.
+    if (!reducedMotion && ringRef.current) {
       const { kind, origin, start } = ringRef.current
       const dur = kind === 'win' ? RING_WIN_MS : RING_LOSS_MS
       const age = performance.now() - start
@@ -1671,7 +1701,10 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
     // shard trajectories tumbling from the vein tile (never a particle
     // spawner: fixed N, a pure function of (tile-seed, elapsed time), no
     // continuous emission or pooling).
-    if (scatterRef.current) {
+    // B2: the shard scatter's end-state is landed/faded (opacity 0), i.e. gone,
+    // so under reduced-motion it is skipped — the cracked ducat itself (baked
+    // into the static board) still marks the bust tile.
+    if (!reducedMotion && scatterRef.current) {
       const { origin, start, shards } = scatterRef.current
       const age = performance.now() - start
       if (age >= SCATTER_MS) {
@@ -1709,7 +1742,10 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
     }
 
     // Full-canvas blood flash on a bust — fast fade, bounded, one-shot.
-    if (flashRef.current != null) {
+    // B2: the flash's end-state is fully faded (alpha 0), so under reduced-motion
+    // it is skipped — no full-canvas red pulse. The static focus vignette below
+    // (a non-animated gradient) still draws the eye to the vein on a bust.
+    if (!reducedMotion && flashRef.current != null) {
       const age = performance.now() - flashRef.current
       if (age >= BUST_FLASH_MS) {
         flashRef.current = null
@@ -1753,6 +1789,7 @@ export function AssayGridCanvas(props: AssayGridCanvasProps) {
     interactive,
     cursorIdx,
     hasFocus,
+    reducedMotion,
   ])
 
   // Redraw on any relevant change + a light rAF for every phase except lobby

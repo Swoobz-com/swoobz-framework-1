@@ -199,12 +199,14 @@ export function BetConsole({
                 <div style={s.wagerBlock}>
                   <span style={s.sectionLabel}>{wagerLabel}</span>
                   <div style={s.wagerWindow}>
-                    <button type="button" onClick={onStepDown} style={s.stepBtn} aria-label="Decrease bet">
-                      −
+                    {/* WCAG 2.5.5 touch-target fix (2026-07-07) — see s.stepBtnHit
+                        comment below for the hit-area-expansion rationale. */}
+                    <button type="button" onClick={onStepDown} style={s.stepBtnHit} aria-label="Decrease bet">
+                      <span style={s.stepBtn} aria-hidden="true">−</span>
                     </button>
                     <div style={s.wagerValue}>{wagerDisplay}</div>
-                    <button type="button" onClick={onStepUp} style={s.stepBtn} aria-label="Increase bet">
-                      +
+                    <button type="button" onClick={onStepUp} style={s.stepBtnHit} aria-label="Increase bet">
+                      <span style={s.stepBtn} aria-hidden="true">+</span>
                     </button>
                   </div>
                   <div style={s.chipRow}>
@@ -299,12 +301,14 @@ export function BetConsole({
             <div style={s.wagerBlock}>
               <span style={s.sectionLabel}>{wagerLabel}</span>
               <div style={s.wagerWindow}>
-                <button type="button" onClick={onStepDown} style={s.stepBtn} aria-label="Decrease bet">
-                  −
+                {/* WCAG 2.5.5 touch-target fix (2026-07-07) — see s.stepBtnHit
+                    comment below for the hit-area-expansion rationale. */}
+                <button type="button" onClick={onStepDown} style={s.stepBtnHit} aria-label="Decrease bet">
+                  <span style={s.stepBtn} aria-hidden="true">−</span>
                 </button>
                 <div style={s.wagerValue}>{wagerDisplay}</div>
-                <button type="button" onClick={onStepUp} style={s.stepBtn} aria-label="Increase bet">
-                  +
+                <button type="button" onClick={onStepUp} style={s.stepBtnHit} aria-label="Increase bet">
+                  <span style={s.stepBtn} aria-hidden="true">+</span>
                 </button>
               </div>
               <div style={s.chipRow}>
@@ -405,6 +409,13 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       gap: 12,
       boxShadow: `0 -12px 40px rgba(0,0,0,0.6), inset 0 1px 0 ${t.trimGlow}`,
       pointerEvents: 'auto',
+      // WCAG touch-target fix (2026-07-07) — belt-and-braces alongside the
+      // per-control touchAction below: the browser computes the EFFECTIVE
+      // touch-action of a touched element as the intersection of its own
+      // value and every ancestor's, so setting it here too guarantees no
+      // double-tap-zoom / 300ms tap delay anywhere inside this panel even
+      // for a future control that forgets to set it itself.
+      touchAction: 'manipulation',
     },
     // Wide-panel-only wrapper (see `isWidePanel` above) — keeps the
     // interactive content block at a readable width, centered inside a wide
@@ -488,10 +499,23 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       borderRadius: 10,
       boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.45)',
     },
+    // WCAG 2.5.5 touch-target fix (2026-07-07, QA sweep fix #6 of 7) — the
+    // stepper was a 34x34 button, below the >=44x44 AA-friendly minimum.
+    // Ballooning the VISIBLE swatch to 44x44 would look like an oversized
+    // blob around a tiny -/+ glyph, so instead the hit area is expanded via
+    // a wrapper: `stepBtnHit` is the REAL <button> (44x44, invisible,
+    // borderless) and this `stepBtn` style is now applied to an inner
+    // <span> that renders the exact original 34x34 swatch centered inside
+    // it — pixel-identical visual, desktop density preserved, only the
+    // tappable region grows. `pointerEvents` stays default (auto isn't
+    // needed — the span has no own listener, clicks bubble to the button).
     stepBtn: {
       width: 34,
       height: 34,
       flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       borderRadius: 8,
       border: '1px solid rgba(255,255,255,0.12)',
       background: 'rgba(255,255,255,0.05)',
@@ -499,7 +523,23 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontFamily: mono,
       fontSize: 20,
       lineHeight: '1',
+    },
+    // The real, invisible, 44x44 hit target (see comment above). Zero
+    // padding/border/background of its own — box-sizing doesn't matter
+    // here since there's no padding to conflict with the width/height.
+    stepBtnHit: {
+      width: 44,
+      height: 44,
+      flexShrink: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 0,
+      margin: 0,
+      background: 'transparent',
+      border: 'none',
       cursor: 'pointer',
+      touchAction: 'manipulation',
     },
     wagerValue: {
       flex: 1,
@@ -511,8 +551,19 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontVariantNumeric: 'tabular-nums',
     },
     chipRow: { display: 'flex', gap: 6 },
+    // WCAG 2.5.5 touch-target fix (2026-07-07) — was `padding:'7px 0'` only
+    // (~28px tall). minHeight + border-box guarantees >=44px on the full
+    // visible pill (unlike the icon-only stepper, the whole chip surface IS
+    // its own affordance, so growing it reads as a normal touch-friendly
+    // quick-bet chip, not "ballooned chrome"). flex centering keeps the
+    // label centered in the taller box regardless of font metrics.
     chip: {
       flex: 1,
+      minHeight: 44,
+      boxSizing: 'border-box',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       padding: '7px 0',
       borderRadius: 8,
       border: '1px solid rgba(255,255,255,0.10)',
@@ -522,9 +573,15 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontSize: 12,
       fontWeight: 600,
       cursor: 'pointer',
+      touchAction: 'manipulation',
     },
     chipOn: {
       flex: 1,
+      minHeight: 44,
+      boxSizing: 'border-box',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       padding: '7px 0',
       borderRadius: 8,
       border: `1px solid ${t.accentSoftBorder}`,
@@ -534,6 +591,7 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontSize: 12,
       fontWeight: 800,
       cursor: 'pointer',
+      touchAction: 'manipulation',
     },
 
     slot: { display: 'flex', flexDirection: 'column', gap: 8 },
@@ -583,10 +641,18 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       justifyContent: 'flex-end',
       flexWrap: 'wrap',
     },
+    // WCAG 2.5.5 touch-target fix (2026-07-07) — was ~28px tall (padding
+    // '8px 12px' + 10px text). minHeight + border-box brings the full pill
+    // to >=44px; existing `alignItems:'center'` re-centers the label/chevron
+    // in the taller box, so this is a height-only change (width was already
+    // comfortably >44px from the label + padding).
     optionsPill: {
       display: 'inline-flex',
       alignItems: 'center',
+      justifyContent: 'center',
       gap: 4,
+      minHeight: 44,
+      boxSizing: 'border-box',
       padding: '8px 12px',
       borderRadius: 999,
       border: '1px solid rgba(255,255,255,0.10)',
@@ -597,11 +663,15 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontWeight: 700,
       letterSpacing: '0.12em',
       cursor: 'pointer',
+      touchAction: 'manipulation',
     },
     optionsPillOn: {
       display: 'inline-flex',
       alignItems: 'center',
+      justifyContent: 'center',
       gap: 4,
+      minHeight: 44,
+      boxSizing: 'border-box',
       padding: '8px 12px',
       borderRadius: 999,
       border: `1px solid ${t.accentSoftBorder}`,
@@ -612,9 +682,19 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontWeight: 700,
       letterSpacing: '0.12em',
       cursor: 'pointer',
+      touchAction: 'manipulation',
     },
     chevron: { display: 'inline-block', fontSize: 9, transition: 'transform 200ms ease' },
+    // WCAG 2.5.5 touch-target fix (2026-07-07) — was ~29px tall. This
+    // control has NO background/border of its own (`transparent`/`none`),
+    // so growing its box to 44px is a PURE hit-area expansion with zero
+    // visible change — the ideal case the fix brief calls for.
     cancel: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 44,
+      boxSizing: 'border-box',
       background: 'transparent',
       border: 'none',
       color: t.textDim,
@@ -623,11 +703,20 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       letterSpacing: '0.06em',
       cursor: 'pointer',
       padding: '8px 6px',
+      touchAction: 'manipulation',
     },
     // The ONE full-accent element on the panel.
+    // WCAG 2.5.5 touch-target fix (2026-07-07) — was ~43px tall (borderline
+    // under the 44px floor); minHeight+border-box guarantees the floor is
+    // met with a negligible (<1px) visual change.
     commit: {
       flex: 1,
       minWidth: 150,
+      minHeight: 44,
+      boxSizing: 'border-box',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       padding: '13px 18px',
       borderRadius: 10,
       border: 'none',
@@ -639,10 +728,16 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       letterSpacing: '0.06em',
       cursor: 'pointer',
       boxShadow: `0 0 16px ${t.accentSoftBg}`,
+      touchAction: 'manipulation',
     },
     commitOff: {
       flex: 1,
       minWidth: 150,
+      minHeight: 44,
+      boxSizing: 'border-box',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       padding: '13px 18px',
       borderRadius: 10,
       border: '1px solid rgba(255,255,255,0.10)',
@@ -653,6 +748,7 @@ function makeStyles(t: BetConsoleTheme): Record<string, CSSProperties> {
       fontWeight: 700,
       letterSpacing: '0.06em',
       cursor: 'not-allowed',
+      touchAction: 'manipulation',
     },
   }
 }

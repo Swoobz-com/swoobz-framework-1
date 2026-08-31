@@ -21,9 +21,12 @@
  * loop. The on-chain math is FIXED (vaultMath.cumulativeMultiplierBps).
  * The rhythm window does NOT modify any economic value. It surfaces a
  * "perfect tumbler" / "in the groove" badge + tumbler-click sound on the
- * Nth consecutive in-rhythm tap. The 1.05-1.15× language in the campaign
- * spec maps to the CUMULATIVE multiplier band where the rhythm bucket
- * activates — not a payout modifier.
+ * Nth consecutive in-rhythm tap. `RHYTHM_MIN_CUMULATIVE_BPS` (1.05×) is
+ * an economic-stake FLOOR gating whether any badge can show at all; the
+ * mid ("IN RHYTHM") vs peak ("CLEAN TEMPO") tier is decided purely by
+ * consecutive chain length (`RHYTHM_MIN_CHAIN`, `RHYTHM_PEAK_CHAIN`), not
+ * by the cumulative multiplier value — this keeps both tiers reachable
+ * regardless of a world's mine-density curve. Never a payout modifier.
  *
  * Domain C: presentation only. Pure functions. No mutation, no I/O.
  */
@@ -54,10 +57,14 @@ export const SOLID_VAULT_NARRATIVES: ReadonlyArray<string> = [
 ] as const
 
 /** Tight — small bag, still a bag. */
+// FIX 4 (2026-07-07, consolidated fix pass) — "you'll take it" was future
+// tense, clashing with `settlementEyebrow`'s past-tense "TOOK PROFIT" /
+// `HudSettledBanner`'s "SECURED THE BAG" on the SAME already-settled
+// screen. Swapped for "you took it" (past tense, same degen voice).
 export const TIGHT_VAULT_NARRATIVES: ReadonlyArray<string> = [
   'scraped some green',
   'small bag, still a bag',
-  "you'll take it",
+  'you took it',
   'paper-handed, but up',
 ] as const
 
@@ -132,9 +139,18 @@ export function settlementNarrative(multiplierBps: bigint, won: boolean): string
 /**
  * Eyebrow line above the narrative — discipline / institutional register.
  * Identical phrasing per outcome class (no per-round variation; RG-C5 safe).
+ *
+ * PAST TENSE by design (2026-07-07 fix): this only ever renders on the
+ * already-SETTLED screen (`VaultHeroOverlay`'s center reveal + the mobile
+ * `Settlement` RESULT tier), never during `playing`. The live cash-out
+ * button (`cashOutLabel`/`cashOutLabelDramatic`, "TAKE PROFIT") is a
+ * SEPARATE literal in VaultExperience.tsx and stays imperative/present —
+ * that button fires the action, this eyebrow confirms it already happened.
+ * "TOOK PROFIT" also now matches `HudSettledBanner`'s "SECURED THE BAG"
+ * tense (desktop settled banner), closing the tense-mismatch QA finding.
  */
 export function settlementEyebrow(won: boolean): string {
-  return won ? 'TAKE PROFIT' : 'RUGGED'
+  return won ? 'TOOK PROFIT' : 'RUGGED'
 }
 
 // ─── Target-lock / auto-cash headlines (ITEM 3) ─────────────────────────────
@@ -175,24 +191,30 @@ export function targetLockNarrative(multiplierBps: bigint): string {
 export const RHYTHM_WINDOW_MS = 1_400
 
 /**
- * Minimum cumulative multiplier required for a "perfect tumbler" badge.
- * The badge is purely visual; the on-chain math is unchanged. The badge
- * activates only once the round has built genuine economic stake (so it
- * doesn't fire on a rhythm of two near-zero-delta clicks).
+ * Minimum cumulative multiplier required for ANY rhythm badge (the
+ * economic-stake FLOOR, not a tier boundary). The badge is purely visual;
+ * the on-chain math is unchanged. The floor exists only so the celebration
+ * doesn't fire on a rhythm of near-zero-delta clicks before the round has
+ * built genuine stake.
  *
- * 10_500 BPS = 1.05× cumulative — matches the campaign's 1.05-1.15×
- * "perfect-hit ramp" range, reinterpreted as the band where the rhythm
- * celebration TIER activates. The math itself never ramps; only the
- * cosmetic badge tier shifts.
+ * 10_500 BPS = 1.05× cumulative. This is crossed by the FIRST reveal in
+ * every world (bluechips / altseason / shitcoin), so in normal play it
+ * never blocks the badge — it only guards the degenerate near-zero-stake
+ * edge case.
+ *
+ * FIX 5 (2026-07-07, rhythm-tier reachability): previously this constant
+ * paired with `RHYTHM_PEAK_CUMULATIVE_BPS` to define a mid/peak BAND on
+ * cumulative BPS. Because mine-density makes the three worlds' cumulative
+ * curves diverge wildly (BLUECHIPS reveal3 = 13_629 bps, ALTSEASON
+ * reveal3 = 18_412 bps, SHITCOIN reveal3 = 65_370 bps, all already past a
+ * narrow [10_500, 11_500) band by the time `RHYTHM_MIN_CHAIN` first
+ * allows evaluation), the mid "IN RHYTHM" tier was unreachable in ALL
+ * three worlds — the badge jumped straight to 'perfect'. No value-based
+ * band can be mode-independent given that divergence, so the PEAK tier is
+ * now CHAIN-based instead (see `RHYTHM_PEAK_CHAIN`) and this constant is
+ * demoted to a pure economic floor.
  */
 export const RHYTHM_MIN_CUMULATIVE_BPS = 10_500n
-
-/**
- * Tier band: at >= this BPS, the rhythm badge upgrades from "in rhythm"
- * to "perfect tumbler" (the 1.15× edge of the campaign band). Cosmetic
- * only.
- */
-export const RHYTHM_PEAK_CUMULATIVE_BPS = 11_500n
 
 /**
  * Minimum consecutive in-rhythm safe reveals before the badge surfaces.
@@ -202,11 +224,29 @@ export const RHYTHM_PEAK_CUMULATIVE_BPS = 11_500n
 export const RHYTHM_MIN_CHAIN = 3
 
 /**
+ * Consecutive in-rhythm chain length at which the badge upgrades from
+ * "in rhythm" (mid tier) to "perfect tumbler" (peak tier). 5 = two more
+ * consecutive in-window taps past the mid-tier gate at `RHYTHM_MIN_CHAIN`
+ * — a deliberately sustained tempo, not a lucky pair of clicks.
+ *
+ * FIX 5 (2026-07-07): the peak tier is CHAIN-based, not cumulative-BPS-
+ * based, because a within-round consecutive-tap count is mode-independent
+ * by construction — it doesn't care how fast a given world's mine density
+ * moves the multiplier. This makes both tiers reachable in normal play on
+ * every world. RG-C5 safe: `chain` already resets to 1 every round at
+ * bet-entry (VaultExperience) and is capped by real reveal cadence within
+ * the `RHYTHM_WINDOW_MS` window — it is not an unbounded escalating
+ * session counter.
+ */
+export const RHYTHM_PEAK_CHAIN = 5
+
+/**
  * Result of a rhythm-tick evaluation.
  *
  * `chain` is the new consecutive-in-rhythm count.
  * `badge` is the cosmetic tier to display: null (no badge), 'rhythm'
- *   (in-rhythm chain but pre-peak), or 'perfect' (peak band reached).
+ *   (in-rhythm chain but below `RHYTHM_PEAK_CHAIN`), or 'perfect'
+ *   (chain has reached `RHYTHM_PEAK_CHAIN`).
  */
 export interface RhythmTick {
   readonly chain: number
@@ -219,10 +259,13 @@ export interface RhythmTick {
  * current cumulative multiplier, return the new chain count and the
  * cosmetic badge tier.
  *
- * RG-C5 SAFE: inputs are timestamps + an economic value (cumulative bps).
- * No streak length, no session-rounds, no per-tile escalation by index.
- * The badge tier is bucketed by the CURRENT cumulative multiplier (an
- * economic signal), not by how many tiles preceded.
+ * RG-C5 SAFE: inputs are timestamps, a within-round chain count that
+ * resets every round at bet-entry, and an economic value (cumulative
+ * bps) used only as a floor gate. No session-rounds input, no per-tile
+ * escalation by index. The economic value gates WHETHER a badge can show
+ * at all (genuine stake on the table); the TIER (mid vs peak) is decided
+ * by `chain` alone, which is what makes both tiers mode-independent
+ * across worlds with very different cumulative-multiplier curves.
  *
  * @param previousRevealAt Timestamp of the prior safe reveal (ms). Pass
  *   0 for "no prior reveal" (resets chain).
@@ -251,16 +294,18 @@ export function evaluateRhythmTick(
   if (chain < RHYTHM_MIN_CHAIN) {
     return { chain, badge: null }
   }
-  // Below the minimum cumulative-multiplier band — no badge (RG-C0:
+  // Below the minimum cumulative-multiplier floor — no badge (RG-C0:
   // celebration only when there is genuine economic stake on the table).
   if (cumulativeBps < RHYTHM_MIN_CUMULATIVE_BPS) {
     return { chain, badge: null }
   }
-  // Peak band — "perfect tumbler" tier.
-  if (cumulativeBps >= RHYTHM_PEAK_CUMULATIVE_BPS) {
+  // Peak tier — sustained chain length, "perfect tumbler". Chain-based
+  // (FIX 5, 2026-07-07) so the tier is reachable regardless of how fast a
+  // given world's mine density moves the cumulative multiplier.
+  if (chain >= RHYTHM_PEAK_CHAIN) {
     return { chain, badge: 'perfect' }
   }
-  // Mid band — "in rhythm" tier.
+  // Mid tier — "in rhythm".
   return { chain, badge: 'rhythm' }
 }
 
