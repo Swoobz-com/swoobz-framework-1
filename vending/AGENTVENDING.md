@@ -17,7 +17,9 @@ PRESENTATION and must stay that way.
 ## The laws (violating any = your work is rejected)
 
 1. MONEY LAW: `vendingMath.ts` and `vendingAudio.ts` are hash-pinned —
-   SHA-256 C5FE160B… / 8609C589… Quote before/after hashes in every report.
+   SHA-256 C5FE160B… / 84E26AFB… Quote before/after hashes in every report.
+   (Audio re-pinned 2026-08-31 after the F5 sound-design round, RG-C5
+   attested 6/6 by swoobz-rg-c5-qa; the previous pin was 8609C589….)
    `vendingProvider.ts` changes need loud justification + a 2M-round
    `node originals/vending/vendingSim.mjs 2000000` re-run. All outcomes derive
    at vendPacks() commit via derivePackRoll(seed, packIndex) — nothing
@@ -74,7 +76,11 @@ PRESENTATION and must stay that way.
 - `VendingExperience.tsx` — everything DOM: turntable, per-tier CSS vars,
   cutscene, settled panel, selection state (`selectedSlots`, FIFO,
   clear-on-vend + clear-on-rotate), `computeSlotOrder`.
-- `vendingAudio.ts` — 4 zero-param cues. Do not add parameters.
+- `vendingAudio.ts` — 9 zero-param cues (4 original + ripOpen/dudSettle/
+  standardSettle/lossClose/buildTick, 2026-08-31). Do not add parameters.
+  NB the banner's "byte-identical" wording is loose — the noise buffer is
+  freshly randomized per firing; class-identical is the true claim (RG-C5
+  audit observation, non-blocking).
 - Assets: Higgsfield only, provenance in `used-assets/*/MANIFEST.md`; never
   bake text into generated art; card faces get DOM number overlays.
 

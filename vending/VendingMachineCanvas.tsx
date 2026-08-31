@@ -62,10 +62,14 @@ const SLOT_BLOOM_MS = 240
  *  animation-counting law: no unsynced oscillators). Opacity-only (composited,
  *  cheap); reduced-motion shows the static glow instead. */
 const SLOT_BREATHE_MS = 2600
-const SHELF_LETTERS = ['A', 'B', 'C', 'D'] as const
+/** Shelf rows top→bottom. Exported so the rail's code panel types the SAME
+ *  codes the glass cells wear — one source, no drift. */
+export const SHELF_LETTERS = ['A', 'B', 'C', 'D'] as const
+/** Columns per shelf (the 1..5 half of a code). */
+export const SLOT_COLUMNS = 5
 /** Slot index (0..19, shelf-major) → punch-code tag (A1..D5). */
-function slotCode(slot: number): string {
-  return `${SHELF_LETTERS[Math.floor(slot / 5)] ?? '?'}${(slot % 5) + 1}`
+export function slotCode(slot: number): string {
+  return `${SHELF_LETTERS[Math.floor(slot / SLOT_COLUMNS)] ?? '?'}${(slot % SLOT_COLUMNS) + 1}`
 }
 
 // ── Vend choreography timings (module consts, RG-C5) ────────────────────────

@@ -15,8 +15,15 @@
  * auto-repeat (every vend is an explicit press). No em-dashes in copy.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { VendingMachineCanvas } from './VendingMachineCanvas'
-import { playGoldPack, playVendPack } from './vendingAudio'
+import { SHELF_LETTERS, SLOT_COLUMNS, slotCode, VendingMachineCanvas } from './VendingMachineCanvas'
+import {
+  playBuildTick,
+  playDudSettle,
+  playGoldPack,
+  playLossClose,
+  playRipOpen,
+  playStandardSettle,
+} from './vendingAudio'
 import { derivePackRoll, TIER_DISPLAY_LABEL, useVendingController, VEND_STEP_MS } from './vendingProvider'
 import type { PackResult, VendingOutcome } from './vendingProvider'
 import {
@@ -99,6 +106,19 @@ const selectOptionStyle: React.CSSProperties = {
  *  markering — groen voor easy, ember-rood voor hard). The room crossfades
  *  WITH the turntable; the glow is the instant difficulty read. Provenance in
  *  used-assets/room-templates/MANIFEST.md. */
+/** F9 — ONE backdrop geometry for all three rooms. The tester read the three
+ *  machines as three different spaces (side borders on TIDE and STORM, a
+ *  full-bleed OBSIDIAN, a floor line that jumped on rotate), so the sizing mode
+ *  and the anchor are module consts applied to every room from one place: a
+ *  future room cannot be added with its own framing. `center bottom` is the
+ *  anchor that pins the floor line while the viewport height changes.
+ *  NOTE: the three source PNGs are all 1376x768 and already render identically
+ *  under these rules — the remaining difference is BAKED INTO THE ART (TIDE
+ *  carries a lit cream wall at both frame edges, OBSIDIAN runs dark to the
+ *  edge). That is an art-regeneration item, out of scope for this round. */
+const ROOM_SIZE = 'cover'
+const ROOM_ANCHOR = 'center bottom'
+
 /** The three money machines on the turntable. */
 const MACHINE_ORDER: readonly VendingTierId[] = TIER_ORDER
 const MACHINE_STEP_DEG = 360 / MACHINE_ORDER.length
@@ -308,9 +328,12 @@ function Card({
 function Label({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
     <div
+      className="vend-label"
       style={{
         fontFamily: T.mono,
-        fontSize: 11,
+        // 12px floor: an always-on label never renders smaller than this
+        // (F7 — the old 11px card labels read as texture, not words).
+        fontSize: 12,
         fontWeight: 600,
         letterSpacing: '0.14em',
         color: 'var(--tier-label, rgba(240, 181, 66, 0.78))',
@@ -376,9 +399,14 @@ function SmallBtn({
   )
 }
 
-/** One pack chip on the rail / receipt: multiplier or EMPTY, gold-classed.
+/** One pack chip on the rail / receipt: MONEY on top, multiplier under it, or
+ *  EMPTY, gold-classed (F1: players read what they won, not the factor).
  *  `hidden` (cutscene armed): a face-down chip — no value, no class tell —
- *  so the rip reveal stays unspoiled. */
+ *  so the rip reveal stays unspoiled.
+ *  The two lines carry explicit line-heights so the chip box is the SAME
+ *  height it was as a one-line chip: the rail's height feeds the portrait
+ *  chrome budget, and a taller chip would shrink the cabinet under the
+ *  slot-pick touch floor. */
 function PackChip({
   pack,
   delayMs = 0,
@@ -398,9 +426,11 @@ function PackChip({
         fontFamily: T.mono,
         fontWeight: 700,
         fontSize: 13,
-        padding: '9px 0',
-        width: 62,
+        lineHeight: '15px',
+        padding: '3px 7px',
+        minWidth: 62,
         textAlign: 'center',
+        whiteSpace: 'nowrap',
         borderRadius: 9,
         border: `1px solid ${gold ? T.gold : hidden || dud ? T.cardEdge : 'rgba(122,134,152,0.45)'}`,
         background: gold ? T.goldDim : 'rgba(255,255,255,0.04)',
@@ -408,7 +438,20 @@ function PackChip({
         boxShadow: gold ? `0 0 14px ${T.goldDim}` : 'none',
       }}
     >
-      {hidden ? '?' : dud ? 'EMPTY' : formatMultiplier(pack.multiplierBps)}
+      {hidden ? '?' : dud ? 'EMPTY' : formatUsdc(pack.payoutLamports)}
+      {/* Secondary line: the factor stays available, it just stops being the
+          headline. A face-down or EMPTY chip has no second line. */}
+      <div
+        style={{
+          fontSize: 10,
+          lineHeight: '11px',
+          fontWeight: 600,
+          color: gold ? T.gold : T.faint,
+          opacity: hidden || dud ? 0 : 1,
+        }}
+      >
+        {hidden || dud ? ' ' : formatMultiplier(pack.multiplierBps)}
+      </div>
     </div>
   )
 }
@@ -437,11 +480,31 @@ const RANGE_STYLE: Readonly<
 
 // Rip choreography timings (module consts, RG-C5 — identical every rip).
 const RIP_ENTER_MS = 700
+// F4 anticipation beat: the pack arrives, then HOLDS while a ring tightens
+// around it. Fires before a single card is face-up, so it can carry no tell —
+// the hold is the same length and the ring the same colour on a 20-empty rip
+// and on a gold one.
+const RIP_HOLD_MS = 620
+const RIP_BUILD_TICKS = 3
+const RIP_BUILD_TICK_MS = 170
 const RIP_TEAR_MS = 1050
 const RIP_SPREAD_MS = 620
 const RIP_SPREAD_STAGGER_MS = 45
 const RIP_FLIP_MS = 460
-const RIP_FLIP_STAGGER_MS = 85
+// F4: the flip wave read flat at 85ms. 145ms is enough separation to hear and
+// see each card as its OWN event instead of one blurred sweep.
+const RIP_FLIP_STAGGER_MS = 145
+// Per-card micro hit-stop: the card lands, freezes a beat oversized, settles.
+const RIP_HIT_MS = 260
+// Fraction of the flip after which a card is considered "landed" — the beat
+// (hit-stop / deflate) and its settle cue both hang off this one number.
+const RIP_LAND_AT = 0.55
+// Gold one-shot freeze-frame: the grid holds for exactly this long on the
+// FIRST gold card's landing. Outcome-CLASS beat — one freeze per rip that
+// contains any gold, same duration for a 5x gold and a 100x gold.
+const RIP_GOLD_FREEZE_MS = 620
+// Dud deflate: the empty card sags. Same duration every time, every rip.
+const RIP_DUD_DEFLATE_MS = 380
 
 /** ONE ceremonial rip for the whole buy: the booster floats up, the lip tears
  *  off, and ALL cards fan out of the pack into a grid, then flip face-up in a
@@ -464,15 +527,40 @@ function PackRipCutscene({
   tier: VendingTierId
   onFinish: () => void
 }): React.ReactElement {
-  const [stage, setStage] = useState<'enter' | 'torn' | 'spread' | 'flip' | 'done'>('enter')
+  const [stage, setStage] = useState<'enter' | 'hold' | 'torn' | 'spread' | 'flip' | 'done'>(
+    'enter',
+  )
+  // The gold freeze-frame is a one-shot: true for exactly RIP_GOLD_FREEZE_MS
+  // starting at the FIRST gold card's landing, then never again this rip.
+  const [goldFreeze, setGoldFreeze] = useState(false)
   const timers = useRef<number[]>([])
   const rootRef = useRef<HTMLDivElement | null>(null)
   // Measured overlay box (jesse #2: the grid must fit the REAL column width,
   // not a fixed 520 — mobile columns are ~380px).
   const [box, setBox] = useState({ w: 520, h: 760 })
+  // How much of the rip stage falls BELOW the viewport fold. On desktop the
+  // machine column is taller than the fold, so anything pinned to the stage's
+  // own bottom edge (the SKIP key, the total ribbon, TAP TO CONTINUE) landed
+  // off-screen and the player had no visible way forward. Every bottom-pinned
+  // element is offset by this instead, which moves the CONTROLS up without
+  // touching the card geometry. 0 in portrait, where nothing scrolls.
+  const [foldInset, setFoldInset] = useState(0)
   useEffect(() => {
     const el = rootRef.current
     if (el && el.clientWidth > 0) setBox({ w: el.clientWidth, h: el.clientHeight })
+    const measureFold = (): void => {
+      const node = rootRef.current
+      if (!node) return
+      const r = node.getBoundingClientRect()
+      setFoldInset(Math.max(0, Math.round(r.bottom - window.innerHeight)))
+    }
+    measureFold()
+    window.addEventListener('resize', measureFold)
+    window.addEventListener('scroll', measureFold, { passive: true })
+    return () => {
+      window.removeEventListener('resize', measureFold)
+      window.removeEventListener('scroll', measureFold)
+    }
   }, [])
   const n = outcome.packs.length
   const hasGold = outcome.packs.some((p) => p.cls === 'gold')
@@ -488,7 +576,10 @@ function PackRipCutscene({
   const cardH = Math.round(cardW * 1.4)
   const gridW = cols * cardW + (cols - 1) * gap
   const gridH = rows * cardH + (rows - 1) * gap
-  const gridTop = Math.max(54, Math.round((box.h - gridH) / 2) - 30)
+  // Centre the spread in the VISIBLE part of the stage, not the whole stage:
+  // the card size is untouched, the grid just stops being centred on pixels
+  // the player cannot see.
+  const gridTop = Math.max(54, Math.round((box.h - foldInset - gridH) / 2) - 30)
 
   const clearTimers = (): void => {
     timers.current.forEach((t) => window.clearTimeout(t))
@@ -496,20 +587,76 @@ function PackRipCutscene({
   }
   useEffect(() => {
     clearTimers()
-    const spreadDone = RIP_ENTER_MS + RIP_TEAR_MS + RIP_SPREAD_MS + n * RIP_SPREAD_STAGGER_MS
-    const flipsDone = spreadDone + n * RIP_FLIP_STAGGER_MS + RIP_FLIP_MS
+    // prefers-reduced-motion: no choreography at all. The parent already
+    // refuses to mount the cutscene under reduced motion, so this is the belt
+    // to that braces — if the cutscene is ever reached another way it lands
+    // straight on the finished grid instead of running anticipation, wave,
+    // hit-stops and freeze-frames.
+    // Read synchronously, not through the hook: the hook resolves in its own
+    // effect (one frame late), which is one frame of choreography too many.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setStage('done')
+      return clearTimers
+    }
+    // One timeline, built only from module consts and the pack COUNT/CLASSES —
+    // no multiplier or payout is ever read here (RG-C5).
+    const holdAt = RIP_ENTER_MS
+    const tearAt = holdAt + RIP_HOLD_MS
+    const spreadAt = tearAt + RIP_TEAR_MS
+    const spreadDone = spreadAt + RIP_SPREAD_MS + n * RIP_SPREAD_STAGGER_MS
+    const landOf = (i: number): number =>
+      spreadDone + i * RIP_FLIP_STAGGER_MS + RIP_FLIP_MS * RIP_LAND_AT
+    const lastLand = landOf(n - 1)
+    // The freeze-frame is a beat the whole rip waits out, so the ribbon holds
+    // back for its full (constant) length whenever the rip contains a gold.
+    const flipsDone = lastLand + RIP_FLIP_MS + (hasGold ? RIP_GOLD_FREEZE_MS : 0)
     timers.current.push(
+      window.setTimeout(() => setStage('hold'), holdAt),
       window.setTimeout(() => {
         setStage('torn')
-        playVendPack()
-      }, RIP_ENTER_MS),
-      window.setTimeout(() => setStage('spread'), RIP_ENTER_MS + RIP_TEAR_MS),
-      window.setTimeout(() => {
-        setStage('flip')
-        if (hasGold) playGoldPack()
-      }, spreadDone),
+        playRipOpen()
+      }, tearAt),
+      window.setTimeout(() => setStage('spread'), spreadAt),
+      window.setTimeout(() => setStage('flip'), spreadDone),
       window.setTimeout(() => setStage('done'), flipsDone),
     )
+    // Anticipation ticks: a FIXED count at a FIXED spacing, identical pitch and
+    // level each time. It cannot accelerate and cannot know the outcome.
+    for (let k = 0; k < RIP_BUILD_TICKS; k++) {
+      timers.current.push(window.setTimeout(playBuildTick, holdAt + k * RIP_BUILD_TICK_MS))
+    }
+    // Per-card settle cue on ITS OWN landing beat. Which cue fires is decided
+    // by the card's outcome CLASS alone; every card of a class sounds the same.
+    // (The gold cue used to fire at the START of the flip wave, which announced
+    // a gold before the gold card was face-up — the same suspense leak F2 fixed
+    // on the balance. It now fires when the gold card actually lands.)
+    let goldSeen = false
+    outcome.packs.forEach((p, i) => {
+      const range = cardRange(p)
+      const at = landOf(i)
+      timers.current.push(
+        window.setTimeout(
+          range === 'gold'
+            ? playGoldPack
+            : range === 'empty'
+              ? playDudSettle
+              : playStandardSettle,
+          at,
+        ),
+      )
+      if (range === 'gold' && !goldSeen) {
+        goldSeen = true
+        timers.current.push(
+          window.setTimeout(() => setGoldFreeze(true), at),
+          window.setTimeout(() => setGoldFreeze(false), at + RIP_GOLD_FREEZE_MS),
+        )
+      }
+    })
+    // Net loss closes on a neutral mechanism cue (class-keyed exactly like the
+    // NET figure's colour, RG-C2). A net win needs no extra sting.
+    if (outcome.totalPayoutLamports < outcome.totalWagerLamports) {
+      timers.current.push(window.setTimeout(playLossClose, flipsDone))
+    }
     return clearTimers
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -519,6 +666,7 @@ function PackRipCutscene({
   // want; the next click continues to the receipt.
   const fastForward = (): void => {
     clearTimers()
+    setGoldFreeze(false)
     if (stage === 'done') {
       onFinish()
       return
@@ -526,10 +674,15 @@ function PackRipCutscene({
     setStage('done')
   }
 
-  const torn = stage !== 'enter'
+  const holding = stage === 'hold'
+  const torn = stage !== 'enter' && stage !== 'hold'
   const spread = stage === 'spread' || stage === 'flip' || stage === 'done'
   const flipping = stage === 'flip' || stage === 'done'
   const done = stage === 'done'
+  // The per-card beats belong to the natural wave only. A fast-forward jumps
+  // every card to face-up at once, where 20 simultaneous punches would read as
+  // a glitch rather than a reveal.
+  const beating = stage === 'flip'
 
   return (
     <div
@@ -546,7 +699,12 @@ function PackRipCutscene({
       }}
       style={{
         position: 'absolute',
-        inset: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        // Stop above the code panel (0 when there is none): the rip covers the
+        // cabinet and its rail, never the machine's own hardware below it.
+        bottom: 'var(--vend-panel-h, 0px)',
         zIndex: 6,
         borderRadius: 18,
         overflow: 'hidden',
@@ -584,7 +742,7 @@ function PackRipCutscene({
         style={{
           ...btnBase,
           position: 'absolute',
-          bottom: 14,
+          bottom: 14 + foldInset,
           right: 14,
           fontSize: 12,
           padding: '0 16px',
@@ -619,7 +777,13 @@ function PackRipCutscene({
           src={packImg}
           alt=""
           className={
-            stage === 'enter' ? 'rip-pack-in' : torn && !spread ? 'rip-lip-tear' : ''
+            stage === 'enter'
+              ? 'rip-pack-in'
+              : holding
+                ? 'rip-hold'
+                : torn && !spread
+                  ? 'rip-lip-tear'
+                  : ''
           }
           style={{
             position: 'absolute',
@@ -637,7 +801,13 @@ function PackRipCutscene({
           src={packImg}
           alt=""
           className={
-            stage === 'enter' ? 'rip-pack-in' : torn && !spread ? 'rip-body-shake' : ''
+            stage === 'enter'
+              ? 'rip-pack-in'
+              : holding
+                ? 'rip-hold'
+                : torn && !spread
+                  ? 'rip-body-shake'
+                  : ''
           }
           style={{
             position: 'absolute',
@@ -669,6 +839,34 @@ function PackRipCutscene({
             }}
           />
         )}
+        {/* F4 anticipation: the pack compresses and a ring closes in on it.
+            Deliberately NEUTRAL cyan-white — never the gold ray colour — so a
+            player cannot read the outcome off the build-up. Identical length,
+            colour and geometry on every rip (RG-C5: module consts only). */}
+        {holding && (
+          <div
+            aria-hidden
+            className="rip-anticipate"
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              // Sized to close ONTO the 210x300 pack and stop just outside it.
+              // The first cut ended at 245px, inside the pack's own height, so
+              // the ring finished hidden behind the foil and the beat read as
+              // nothing happening.
+              width: 420,
+              height: 420,
+              marginLeft: -210,
+              marginTop: -210,
+              borderRadius: '50%',
+              border: '2px solid rgba(196,226,244,0.7)',
+              boxShadow: '0 0 34px rgba(150,200,230,0.4), inset 0 0 46px rgba(150,200,230,0.26)',
+              zIndex: 1,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
         {/* Tear seam glow: rips open left → right with the strip. */}
         {torn && !spread && (
           <div
@@ -691,6 +889,7 @@ function PackRipCutscene({
       {/* The card spread: every card flies from the pack mouth to its grid
           slot (staggered), lands face-down, then the wave flip runs. */}
       <div
+        className={goldFreeze ? 'rip-freeze-hold' : ''}
         style={{
           position: 'absolute',
           left: '50%',
@@ -716,6 +915,13 @@ function PackRipCutscene({
           const flipped = done || stage === 'flip'
           const spreadDelay = done ? 0 : i * RIP_SPREAD_STAGGER_MS
           const flipDelay = done ? 0 : i * RIP_FLIP_STAGGER_MS
+          // F4 landing beat, chosen by outcome CLASS and nothing else: an
+          // EMPTY card sags (deflate), every paying card punches (hit-stop).
+          // A 1.2x common, a 9.9x rare and a 100x gold run the SAME hit-stop
+          // for the SAME RIP_HIT_MS; gold's extra is the one-shot freeze
+          // below, which is also a fixed length.
+          const beatClass = !beating ? '' : range === 'empty' ? 'rip-deflate' : 'rip-hit'
+          const beatDelay = Math.round(flipDelay + RIP_FLIP_MS * RIP_LAND_AT)
           return (
             <div
               key={p.packIndex}
@@ -733,6 +939,17 @@ function PackRipCutscene({
                 transition: `transform ${RIP_SPREAD_MS}ms cubic-bezier(0.22, 1.15, 0.3, 1) ${spreadDelay}ms, opacity 260ms ease ${spreadDelay}ms`,
               }}
             >
+             <div
+               className={beatClass}
+               style={{
+                 position: 'absolute',
+                 inset: 0,
+                 // The 3D perspective has to live on the DIRECT parent of the
+                 // flipping face, which is now this beat wrapper.
+                 perspective: 700,
+                 animationDelay: `${beatDelay}ms`,
+               }}
+             >
               {/* Gold ray burst behind the card, fires on its flip beat. */}
               {range === 'gold' && (
                 <div
@@ -826,7 +1043,12 @@ function PackRipCutscene({
                   }}
                 />
               </div>
-              {/* Multiplier chip on the card, lands right after its flip. */}
+              {/* Value block on the card, lands right after its flip. MONEY is
+                  the headline (F1: two testers read the factor as noise); the
+                  factor keeps its line underneath. An EMPTY card still reads
+                  EMPTY — it is a class marker, not a number. Both type sizes
+                  are derived from the card box alone (never from the value),
+                  so every card in a spread is styled identically (RG-C2). */}
               <div
                 style={{
                   position: 'absolute',
@@ -836,7 +1058,8 @@ function PackRipCutscene({
                   textAlign: 'center',
                   fontFamily: T.mono,
                   fontWeight: 800,
-                  fontSize: Math.max(15, Math.round(cardW * 0.22)),
+                  fontSize: Math.max(15, Math.round(cardW * 0.18)),
+                  lineHeight: 1.15,
                   color: rs.color,
                   textShadow: '0 2px 8px rgba(0,0,0,0.9)',
                   opacity: flipped ? 1 : 0,
@@ -844,12 +1067,42 @@ function PackRipCutscene({
                   transition: `opacity 240ms ease ${flipDelay + RIP_FLIP_MS * 0.6}ms, transform 240ms cubic-bezier(0.2, 1.4, 0.3, 1) ${flipDelay + RIP_FLIP_MS * 0.6}ms`,
                 }}
               >
-                {p.multiplierBps === 0n ? 'EMPTY' : formatMultiplier(p.multiplierBps)}
+                {p.multiplierBps === 0n ? 'EMPTY' : `+${formatUsdc(p.payoutLamports)}`}
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: Math.max(12, Math.round(cardW * 0.115)),
+                    lineHeight: 1.25,
+                    opacity: p.multiplierBps === 0n ? 0 : 0.82,
+                  }}
+                >
+                  {p.multiplierBps === 0n ? ' ' : formatMultiplier(p.multiplierBps)}
+                </div>
               </div>
+             </div>
             </div>
           )
         })}
       </div>
+
+      {/* F4 gold beat: a ONE-SHOT freeze-frame on the first gold landing. The
+          grid holds oversized for exactly RIP_GOLD_FREEZE_MS behind a gold
+          vignette, then releases. Fires at most once per rip and runs the same
+          length for a 5x gold and a 100x gold (outcome CLASS, RG-C2). No
+          particles: it is a held frame and a wash, nothing is emitted. */}
+      {goldFreeze && (
+        <div
+          aria-hidden
+          className="rip-goldfreeze"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 2,
+            pointerEvents: 'none',
+            background: `radial-gradient(58% 52% at 50% 46%, rgba(${RANGE_STYLE.gold.ray},0.22) 0%, rgba(${RANGE_STYLE.gold.ray},0.06) 42%, rgba(0,0,0,0) 74%)`,
+          }}
+        />
+      )}
 
       {/* Total ribbon once everything is face-up. */}
       <div
@@ -857,7 +1110,7 @@ function PackRipCutscene({
           position: 'absolute',
           left: 0,
           right: 0,
-          bottom: 72,
+          bottom: 72 + foldInset,
           textAlign: 'center',
           fontFamily: T.mono,
           fontWeight: 800,
@@ -875,7 +1128,7 @@ function PackRipCutscene({
           {formatMultiplier(outcome.aggregateBps)} · NET{' '}
           {outcome.totalPayoutLamports >= outcome.totalWagerLamports
             ? `+${formatUsdc(outcome.totalPayoutLamports - outcome.totalWagerLamports)}`
-            : `-${formatUsdc(outcome.totalWagerLamports - outcome.totalPayoutLamports)}`}
+            : `−${formatUsdc(outcome.totalWagerLamports - outcome.totalPayoutLamports)}`}
         </span>
         <div
           style={{
@@ -907,6 +1160,9 @@ function SettledPanel({
   // against the commit and re-derive every pack's roll through the SAME
   // public derivation; the receipt then carries a live ✓, not just a claim.
   const [verified, setVerified] = useState<boolean | null>(null)
+  // A NET WIN is payout >= stake — never "payout > 0" (RG-C2: a partial return
+  // is a loss and must not wear win styling).
+  const netWin = outcome.totalPayoutLamports >= outcome.totalWagerLamports
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -942,7 +1198,10 @@ function SettledPanel({
     <div
       style={{
         position: 'absolute',
-        inset: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 'var(--vend-panel-h, 0px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -990,6 +1249,9 @@ function SettledPanel({
             }}
           />
         ))}
+        {/* F3 — the verdict in one glance. Eyebrow reads the outcome CLASS
+            (gold present / tray paid / tray empty), never the size of the
+            number; it is the same neutral type in all three cases. */}
         <div
           style={{
             fontFamily: T.mono,
@@ -999,7 +1261,11 @@ function SettledPanel({
             textAlign: 'center',
           }}
         >
-          TRAY SERVED
+          {outcome.goldCount > 0
+            ? 'GOLD VEND'
+            : outcome.totalPayoutLamports > 0n
+              ? 'PAID OUT'
+              : 'NO RETURN'}
         </div>
         <div
           style={{
@@ -1009,33 +1275,43 @@ function SettledPanel({
             textAlign: 'center',
             // Gold ONLY on a net win (RG-C2: a partial-loss return must not
             // wear win styling).
-            color: outcome.totalPayoutLamports >= outcome.totalWagerLamports ? T.gold : T.text,
+            color: netWin ? T.gold : T.text,
             margin: '6px 0 2px',
           }}
         >
           {formatUsdc(outcome.totalPayoutLamports)}
         </div>
-        <div style={{ fontFamily: T.mono, fontSize: 13, color: T.dim, textAlign: 'center' }}>
-          {outcome.tierLabel} · {formatMultiplier(outcome.aggregateBps)} on{' '}
-          {formatUsdc(outcome.totalWagerLamports)} staked ·{' '}
-          {outcome.goldCount > 0 ? `${outcome.goldCount} GOLD` : 'no gold'}
-        </div>
-        {/* Symmetric net delta — identical styling win or loss, only the
-            sign and number differ. */}
+        {/* Symmetric net delta, now the hero line under the payout: identical
+            size, weight and layout win or loss — only the sign and the
+            class-keyed color differ (RG-C2). */}
         <div
           style={{
             fontFamily: T.mono,
-            fontSize: 13,
-            fontWeight: 700,
-            color: T.text,
+            fontSize: 20,
+            fontWeight: 800,
+            letterSpacing: '0.04em',
+            color: netWin ? T.gold : T.text,
             textAlign: 'center',
-            marginTop: 4,
+            marginTop: 2,
           }}
         >
           NET{' '}
-          {outcome.totalPayoutLamports >= outcome.totalWagerLamports
+          {netWin
             ? `+${formatUsdc(outcome.totalPayoutLamports - outcome.totalWagerLamports)}`
-            : `-${formatUsdc(outcome.totalWagerLamports - outcome.totalPayoutLamports)}`}
+            : `−${formatUsdc(outcome.totalWagerLamports - outcome.totalPayoutLamports)}`}
+        </div>
+        {/* Secondary meta: the factor lives here now (F1), with the stake and
+            the gold count. */}
+        <div style={{ fontFamily: T.mono, fontSize: 13, color: T.dim, textAlign: 'center', marginTop: 6 }}>
+          {outcome.tierLabel} · {formatUsdc(outcome.totalWagerLamports)} staked ·{' '}
+          {formatMultiplier(outcome.aggregateBps)} ·{' '}
+          {/* The gold token is ONE word to a reader ("no gold" / "3 GOLD") and
+              broke across lines at 390w as "… 0.41x · no" / "gold". nowrap on
+              the token only — the line still wraps at the other separators, so
+              the card cannot overflow at 360w. */}
+          <span style={{ whiteSpace: 'nowrap' }}>
+            {outcome.goldCount > 0 ? `${outcome.goldCount} GOLD` : 'no gold'}
+          </span>
         </div>
         <div
           style={{
@@ -1140,6 +1416,26 @@ export function VendingExperience(): React.ReactElement {
   useEffect(() => {
     setSelectedSlots((prev) => (prev.length > packCount ? prev.slice(0, packCount) : prev))
   }, [packCount])
+  // ── F6: the code panel. Tim: "you need to type how much you want of what
+  // Row" — so the rail carries machine hardware, an LED readout plus real
+  // keys, instead of a translucent web bar. A code is entered in two presses,
+  // shelf then column (A then 1 = A1); `pendingRow` is the half-typed shelf.
+  // The press ends in the SAME toggleSlot the glass cells call, so typing a
+  // code and tapping the slot are one behaviour with one FIFO rule.
+  const [pendingRow, setPendingRow] = useState<number | null>(null)
+  const pressRow = (row: number): void => {
+    if (phaseKind !== 'ready') return
+    setPendingRow((prev) => (prev === row ? null : row))
+  }
+  const pressColumn = (col: number): void => {
+    if (phaseKind !== 'ready' || pendingRow === null) return
+    toggleSlot(pendingRow * SLOT_COLUMNS + col)
+    setPendingRow(null)
+  }
+  const clearPicks = (): void => {
+    setSelectedSlots([])
+    setPendingRow(null)
+  }
   // COMPACT LANDSCAPE (the 4c fold: stage track ~210px): the percent-sized
   // hit-cells shrink to ~27x37px there — physically no room for 5x 44px
   // columns inside the compacted machine. Slot-picking is an OPTIONAL
@@ -1190,10 +1486,18 @@ export function VendingExperience(): React.ReactElement {
   //     what the root must reserve as padding. A hard-coded reserve
   //     under-counted it on small phones and the strip painted over the
   //     stepper row (blind mobile QA, 2026-08-31).
+  //   codePanelH — the real height of the desktop code panel, which sits at
+  //     the BOTTOM of the stage box. The rip and receipt overlays are absolute
+  //     children of that box, so without this they would grow over the panel
+  //     and push their own bottom-anchored controls (SKIP, the total ribbon)
+  //     below a laptop fold. The overlays stop exactly above the panel.
   const turntableRef = useRef<HTMLDivElement | null>(null)
   const moneyStripRef = useRef<HTMLDivElement | null>(null)
+  const codePanelRef = useRef<HTMLDivElement | null>(null)
   const [stageCanvasW, setStageCanvasW] = useState(0)
   const [moneyStripH, setMoneyStripH] = useState(0)
+  const [codePanelH, setCodePanelH] = useState(0)
+  const slotPickOffered = !compactLandscape && stageCanvasW >= SLOT_PICK_MIN_CANVAS_PX
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver((entries) => {
@@ -1202,16 +1506,24 @@ export function VendingExperience(): React.ReactElement {
         // own padding (including the safe-area inset) from the reserve.
         const h = e.target.getBoundingClientRect()
         if (e.target === turntableRef.current) setStageCanvasW(Math.round(h.width))
+        else if (e.target === codePanelRef.current) setCodePanelH(Math.round(h.height))
         else setMoneyStripH(Math.round(h.height))
       }
     })
     if (turntableRef.current) ro.observe(turntableRef.current)
     if (moneyStripRef.current) ro.observe(moneyStripRef.current)
+    if (codePanelRef.current) ro.observe(codePanelRef.current)
     return () => ro.disconnect()
-  }, [isPortrait])
-  const slotPickOffered = !compactLandscape && stageCanvasW >= SLOT_PICK_MIN_CANVAS_PX
+    // Re-armed when a band MOUNTS or unmounts (the code panel appears with
+    // slot-pick); a bare re-run every render would rebuild the observer in a
+    // measure -> setState -> measure loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPortrait, slotPickOffered])
   useEffect(() => {
-    if (!slotPickOffered) setSelectedSlots([])
+    if (!slotPickOffered) {
+      setSelectedSlots([])
+      setPendingRow(null)
+    }
   }, [slotPickOffered])
   // Selection clears the moment the vend STARTS (Tim 2026-07-22: no lingering
   // highlights while/after the machine runs — the coil already shows where the
@@ -1219,7 +1531,10 @@ export function VendingExperience(): React.ReactElement {
   // mixes with a previous round's marks). settled-clear kept as a safety net;
   // the frozen slotOrder map resets back at ready.
   useEffect(() => {
-    if (phaseKind === 'vending' || phaseKind === 'settled') setSelectedSlots([])
+    if (phaseKind === 'vending' || phaseKind === 'settled') {
+      setSelectedSlots([])
+      setPendingRow(null)
+    }
     if (phaseKind === 'ready') setCommittedSlotOrder(null)
   }, [phaseKind])
   useEffect(() => {
@@ -1245,6 +1560,7 @@ export function VendingExperience(): React.ReactElement {
     setMachine(target)
     c.setTier(target)
     setSelectedSlots([]) // picks are per-machine; a rotate clears them
+    setPendingRow(null)
   }
   const switchTier = (target: VendingTierId): void => {
     if (target === machine || phaseKind === 'vending') return
@@ -1275,6 +1591,56 @@ export function VendingExperience(): React.ReactElement {
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cum, phaseKind])
+  // Physical keyboard punches the same codes as the panel keys (F6): A-D picks
+  // the shelf, 1-5 completes the code. Held modifiers and keystrokes aimed at
+  // a form control are left alone, so the price/packs selects keep their own
+  // native type-ahead.
+  useEffect(() => {
+    const onCode = (e: KeyboardEvent): void => {
+      // Not while an overlay owns the screen: a keystroke behind the help
+      // modal must not quietly punch a code.
+      if (!slotPickOffered || phaseKind !== 'ready' || showHelp) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return
+      const key = e.key.toUpperCase()
+      const row = SHELF_LETTERS.indexOf(key as (typeof SHELF_LETTERS)[number])
+      if (row >= 0) {
+        e.preventDefault()
+        pressRow(row)
+        return
+      }
+      const col = Number(e.key)
+      if (Number.isInteger(col) && col >= 1 && col <= SLOT_COLUMNS && pendingRow !== null) {
+        e.preventDefault()
+        pressColumn(col - 1)
+      }
+    }
+    window.addEventListener('keydown', onCode)
+    return () => window.removeEventListener('keydown', onCode)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slotPickOffered, phaseKind, pendingRow, packCount, selectedSlots, showHelp])
+
+  // ── F2: the reveal owns the result, not the balance ───────────────────────
+  // The provider credits the tray at SETTLE, which is the instant the rip
+  // cutscene STARTS — so the balance moved (or did not) before a single card
+  // turned, and a tester could read the outcome off the top strip. Fixed at
+  // the DISPLAY layer only (the provider is untouched, money law): while the
+  // cutscene still holds the cards face-down, every surface renders the
+  // committed balance MINUS the stake, exactly what it was mid-vend, and the
+  // real balance appears when the reveal completes (cards shown, SKIP pressed,
+  // or the settle panel taking over with the cutscene off).
+  const settledOutcome = state.phase.kind === 'settled' ? state.phase.outcome : null
+  const revealPending =
+    settledOutcome !== null && cutsceneOn && !reduced && !ripDone && settledOutcome.packs.length > 0
+  const displayBalanceLamports =
+    revealPending && settledOutcome
+      ? state.balanceLamports - settledOutcome.totalPayoutLamports
+      : state.balanceLamports
+  // The settled round is prepended to history INSIDE settle(), so the newest
+  // row is the round the player has not seen yet — hold it back with the
+  // balance or LAST VENDS becomes the spoiler instead.
+  const historyRows = revealPending ? state.history.slice(1) : state.history
 
   const railPacks = useMemo<readonly PackResult[]>(() => {
     if (state.phase.kind === 'settled') return state.phase.outcome.packs
@@ -1472,6 +1838,70 @@ export function VendingExperience(): React.ReactElement {
     </div>
   )
 
+  // ── F6 atoms: the machine's code panel ────────────────────────────────────
+  // Declared once, arranged twice (portrait rail bar vs desktop panel), so the
+  // readout can never say one thing on a phone and another on a desktop.
+  const codeTokens = selectedSlots.map(slotCode)
+  if (pendingRow !== null) codeTokens.push(`${SHELF_LETTERS[pendingRow]}_`)
+  const codeReadout = (
+    <span
+      className={`vend-led${codeTokens.length > 0 ? '' : ' is-empty'}`}
+      role="status"
+      aria-label="Slot codes entered"
+    >
+      {codeTokens.length > 0 ? codeTokens.join(' · ') : 'ENTER CODE'}
+    </span>
+  )
+  const codeCount = (
+    <span className="vend-code-count">
+      {selectedSlots.length}/{packCount}
+    </span>
+  )
+  const clearKey = (
+    <button
+      type="button"
+      className="vend-key vend-key-clear"
+      onClick={clearPicks}
+      disabled={selectedSlots.length === 0 && pendingRow === null}
+      aria-label="Clear slot codes"
+    >
+      CLEAR
+    </button>
+  )
+  const keypad = (
+    <div className="vend-keypad">
+      {SHELF_LETTERS.map((letter, row) => (
+        <button
+          key={letter}
+          type="button"
+          className="vend-key vend-key-row"
+          onClick={() => pressRow(row)}
+          aria-label={`Shelf ${letter}`}
+          aria-pressed={pendingRow === row}
+          disabled={phaseKind !== 'ready'}
+        >
+          {letter}
+        </button>
+      ))}
+      <span aria-hidden className="vend-keypad-gap" />
+      {Array.from({ length: SLOT_COLUMNS }, (_, col) => (
+        <button
+          key={col}
+          type="button"
+          className="vend-key vend-key-col"
+          onClick={() => pressColumn(col)}
+          aria-label={`Column ${col + 1}`}
+          // The column half of a code only means something once a shelf is
+          // pending — the disabled state IS the instruction (shelf, then
+          // column), which is why no help text is needed on the panel.
+          disabled={phaseKind !== 'ready' || pendingRow === null}
+        >
+          {col + 1}
+        </button>
+      ))}
+    </div>
+  )
+
   return (
     <div
       className="vend-root"
@@ -1490,6 +1920,12 @@ export function VendingExperience(): React.ReactElement {
         // stepper row — whatever the strip's real line count and safe-area
         // inset turn out to be. Falls back to the CSS default until measured.
         ...(moneyStripH > 0 ? { ['--vend-strip' as string]: `${moneyStripH}px` } : null),
+        // MEASURED height of the code panel at the bottom of the stage box.
+        // The rip + receipt overlays stop above it (they are absolute children
+        // of that box), so the panel stays visible hardware and the overlays'
+        // own bottom-anchored controls keep their place on the cabinet.
+        ['--vend-panel-h' as string]:
+          !isPortrait && slotPickOffered && codePanelH > 0 ? `${codePanelH + 8}px` : '0px',
         minHeight: '100dvh',
         position: 'relative',
         overflow: 'hidden',
@@ -1519,8 +1955,9 @@ export function VendingExperience(): React.ReactElement {
             position: 'absolute',
             inset: 0,
             backgroundImage: `url(${TIER_ROOMS[t].src})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center bottom',
+            backgroundSize: ROOM_SIZE,
+            backgroundPosition: ROOM_ANCHOR,
+            backgroundRepeat: 'no-repeat',
             opacity: t === tier ? 1 : 0,
             transition: reduced ? 'none' : 'opacity 700ms ease',
           }}
@@ -1666,15 +2103,85 @@ export function VendingExperience(): React.ReactElement {
              labels compacted, "10.00" is the widest value either shows. */
           .vend-portrait-row > .vend-stepper-cluster { flex: 1 1 0; }
           .vend-cta { padding-top: 15px !important; padding-bottom: 15px !important; }
+          /* The code bar has to fit the rail box the old glass hint used: a
+             taller rail shrinks the cabinet, and the cabinet's WIDTH is what
+             keeps the glass hit-cells above the 44px touch floor at 390x844
+             (measured 45.4px, 1.4px of headroom). So CLEAR stays a compact
+             30px key here — the tap target the shipped hint already had, and
+             the reason the keypad is desktop-only. Everything else in this
+             layer is >=12px (F7). */
+          /* .vend-rail scope, not a bare .vend-codebar: the base rule is
+             declared LATER in this sheet and a media query adds no
+             specificity, so an equal-specificity override here would lose. */
+          .vend-rail .vend-codebar { gap: 6px; }
+          .vend-codebar .vend-led { font-size: 13px; letter-spacing: 0.1em; padding: 4px 8px; }
+          /* HIT-EXTENDER (mobile-QA: the key measured 61.4x30, under the 44px
+             touch floor). The REAL, hit-testable button box is now 44px tall,
+             while the painted key face stays EXACTLY 61.4x30 and the rail keeps
+             its height to the pixel:
+               · min-height 48px grows the border box (48, not 44: the gate taps
+                 8px clear of the visible face on BOTH sides, which needs 30+16;
+                 48 still lands inside the rail's own 50px border box, y 563-611
+                 vs 562-612, so nothing outside the rail is reachable);
+               · margin -9px 0 gives that growth straight back to the flex line,
+                 so the codebar's line height — and therefore the rail, and
+                 therefore --vend-chrome and the glass cells' 1.4px of headroom
+                 — do not move at all;
+               · the plaque face moves to a ::before inset by that same 9px, so
+                 not one rendered pixel of the key changes.
+             Padding-plus-negative-margin ALONE was rejected: padding grows the
+             box that carries the background and border, i.e. the VISIBLE key.
+             An ::after hit layer was rejected too — a pseudo-element is not a
+             separate hit target, it only widens its originating element's hit
+             region, so the button's own geometry would still report 30px to
+             every measuring gate. Here the 44px is real element geometry. */
+          .vend-codebar .vend-key-clear {
+            min-height: 48px;
+            min-width: 0;
+            padding: 0 10px;
+            margin: -9px 0;
+            /* Own stacking context so the z-index:-1 face cannot fall behind
+               the rail's backplate. */
+            position: relative;
+            z-index: 0;
+            background: none;
+            border-color: transparent;
+            box-shadow: none;
+          }
+          /* Offsets are relative to the button's PADDING box, so the 1.5px
+             borders are backed out: the face's border box lands exactly on the
+             old 61.4x30 rectangle, centred in the 44px target. */
+          .vend-codebar .vend-key-clear::before {
+            content: '';
+            position: absolute;
+            z-index: -1;
+            left: -1.5px;
+            right: -1.5px;
+            top: 7.5px;
+            bottom: 7.5px;
+            border: 1.5px solid rgba(13, 15, 21, 0.95);
+            border-radius: 9px;
+            background: linear-gradient(180deg, var(--tier-key-top, #282d37) 0%, var(--tier-key-bottom, #1d2129) 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -2px 3px rgba(0,0,0,0.4);
+          }
         }
         /* Portrait-only band components. These classes are rendered ONLY inside
            the portrait tree, so they need no media guard and no !important. */
+        /* The strip floats on the ROOM, and TIDE's room is a lit cream wall:
+           measured 1.42:1 for the BALANCE label and 2.50:1 for its value on a
+           390x844 screen (F7 re-measure). It now carries the same gradient
+           band the money strip uses at the other edge — transparent at its
+           inner edge so it still sits ON the scene rather than becoming a
+           plank — and bleeds through the root's 6px padding to the screen
+           edges. Measured after: >=6:1 on all three rooms. */
         .vend-topstrip {
           display: flex;
           align-items: center;
           gap: 8px;
           min-height: 44px;
-          padding: 0 2px;
+          margin: -6px -6px 0;
+          padding: 0 10px;
+          background: linear-gradient(180deg, rgba(4, 6, 9, 0.94) 0%, rgba(4, 6, 9, 0.9) 78%, rgba(4, 6, 9, 0) 100%);
           position: relative;
           z-index: 3;
         }
@@ -1686,19 +2193,23 @@ export function VendingExperience(): React.ReactElement {
           flex: 0 1 auto;
           min-width: 0;
         }
+        /* F7: the label STACKS over its value instead of sitting beside it.
+           A stacked pair is as wide as its widest line rather than the sum of
+           both, which is what buys the room to render every word at 12px or
+           more inside a 44px strip — the old side-by-side pair only fitted at
+           9-10px, the size the tester could not read. */
         .vend-topstrip-bal {
           margin-left: auto;
           display: flex;
-          align-items: baseline;
-          gap: 6px;
+          flex-direction: column;
+          align-items: flex-end;
           font-family: "Geist Mono", ui-monospace, monospace;
-          font-size: 12px;
           white-space: nowrap;
         }
         .vend-topstrip-cut { display: flex; flex: 0 0 auto; }
-        .vend-topstrip-cut > button { font-size: 11px !important; padding: 0 9px !important; }
-        .vend-topstrip-ballabel { letter-spacing: 0.1em; color: #b7c1d0; font-size: 10px; }
-        .vend-topstrip-balval { color: #e8ecf1; font-weight: 700; font-size: 13px; }
+        .vend-topstrip-cut > button { font-size: 12px !important; padding: 0 9px !important; }
+        .vend-topstrip-ballabel { letter-spacing: 0.1em; color: #b7c1d0; font-size: 12px; line-height: 13px; }
+        .vend-topstrip-balval { color: #e8ecf1; font-weight: 700; font-size: 15px; line-height: 17px; }
         /* SMALL PHONES (<=380px): the four-item strip measured 381.8px of
            content at 360px wide, which pushed the help "?" right off the
            viewport — its centre returned null from elementFromPoint, i.e. an
@@ -1712,11 +2223,12 @@ export function VendingExperience(): React.ReactElement {
         @media (max-width: 380px) and (orientation: portrait) {
           .vend-topstrip { gap: 4px; }
           .vend-topstrip-mark { font-size: 12.5px; letter-spacing: 0.06em; }
-          .vend-topstrip-bal { gap: 4px; }
-          .vend-topstrip-ballabel { font-size: 9px; letter-spacing: 0.04em; }
-          .vend-topstrip-balval { font-size: 12px; }
+          /* The stack keeps BOTH lines >=12px at 360w — only the tracking and
+             the chip padding give way here now. */
+          .vend-topstrip-ballabel { letter-spacing: 0.04em; }
+          .vend-topstrip-balval { font-size: 14px; }
           .vend-topstrip-cut > button {
-            font-size: 10px !important;
+            font-size: 12px !important;
             padding: 0 6px !important;
             letter-spacing: 0 !important;
           }
@@ -1736,6 +2248,102 @@ export function VendingExperience(): React.ReactElement {
             font-size: 12px !important;
           }
         }
+        /* ── F6 · the machine's code panel ───────────────────────────────────
+           Plaque material, an LED well and real keys: the same borders, bevel
+           and key faces as the price keys, so the slot picker reads as part of
+           the cabinet instead of a translucent web bar laid over it. Two
+           arrangements, ONE set of atoms: portrait gets the readout bar inside
+           the rail (codes are punched on the glass itself there), desktop gets
+           the full panel with the A-D / 1-5 keypad under the readout. */
+        .vend-codepanel {
+          /* Above the stage's decorative floor art. The plateau disc is an
+             absolutely-positioned aria-hidden sibling EARLIER in the stage, so
+             with both at z-index:auto the disc (positioned) painted over this
+             panel (in-flow) and its dark ellipse swallowed half the label
+             glyphs and washed the B/C/D key faces — the PAINT twin of the 2026-
+             07-22 pointer-events defect (learning 19), which pointer-events
+             :none cannot fix because that only governs hit-testing. z-index:2
+             sits above the disc and below the settled (5) / rip (6) overlays,
+             so the one-overlay-at-a-time rule and the help modal (30) are
+             untouched. */
+          position: relative;
+          z-index: 2;
+          margin-top: 8px;
+          padding: 9px 10px 10px;
+          border: 2px solid rgba(13, 15, 21, 0.95);
+          border-radius: 12px;
+          background: linear-gradient(180deg, var(--tier-plaque-top, #191d25) 0%, var(--tier-plaque-bottom, #10141a) 100%);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -1px 0 rgba(0,0,0,0.4), 0 8px 18px rgba(0,0,0,0.35);
+          display: flex;
+          flex-direction: column;
+          gap: 7px;
+        }
+        .vend-codepanel-label {
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.12em;
+          color: var(--tier-label, rgba(240, 181, 66, 0.78));
+          flex: 0 0 auto;
+        }
+        /* The LED well: a recessed dark readout on the plaque. Cyan is the
+           player's own state (same accent the picked slot wears on the glass);
+           the empty prompt sits in the neutral dimLift register. */
+        .vend-led {
+          flex: 1 1 auto;
+          min-width: 0;
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 14px;
+          font-weight: 700;
+          letter-spacing: 0.14em;
+          line-height: 17px;
+          color: #00F0FF;
+          background: rgba(5, 7, 10, 0.9);
+          border: 1px solid rgba(13, 15, 21, 0.95);
+          border-radius: 7px;
+          box-shadow: inset 0 2px 5px rgba(0,0,0,0.6);
+          padding: 5px 9px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .vend-led.is-empty { color: #b7c1d0; }
+        .vend-code-count {
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          color: #b7c1d0;
+          flex: 0 0 auto;
+        }
+        .vend-key {
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-weight: 700;
+          font-size: 14px;
+          letter-spacing: 0.04em;
+          min-height: 44px;
+          min-width: 44px;
+          padding: 0 10px;
+          color: #cfd5df;
+          border: 1.5px solid rgba(13, 15, 21, 0.95);
+          border-radius: 9px;
+          background: linear-gradient(180deg, var(--tier-key-top, #282d37) 0%, var(--tier-key-bottom, #1d2129) 100%);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -2px 3px rgba(0,0,0,0.4);
+          cursor: pointer;
+          touch-action: manipulation;
+        }
+        .vend-key:disabled { opacity: 0.38; cursor: default; }
+        .vend-key[aria-pressed="true"] {
+          border-color: #00F0FF;
+          color: #00F0FF;
+          background: rgba(0, 240, 255, 0.14);
+        }
+        .vend-key-clear { font-size: 12px; padding: 0 12px; }
+        .vend-keypad { display: flex; align-items: center; gap: 6px; }
+        .vend-keypad-gap { flex: 0 0 10px; }
+        .vend-key-row, .vend-key-col { flex: 1 1 44px; }
+        /* The readout bar lives in the rail in EVERY layout. */
+        .vend-codebar { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
         .vend-disclosure-slot {
           min-height: 14px;
           font-family: "Geist Mono", ui-monospace, monospace;
@@ -1748,11 +2356,23 @@ export function VendingExperience(): React.ReactElement {
         .vend-stepper-cluster { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
         .vend-stepper-cluster > .vend-stepper-label {
           font-family: "Geist Mono", ui-monospace, monospace;
-          font-size: 9.5px;
+          /* F7 12px floor. Costs ~3px of portrait chrome, which the control
+             zone's margin-top:auto slack absorbs (re-measured at all four
+             reference viewports; the cabinet width is unchanged). */
+          font-size: 12px;
+          line-height: 14px;
           font-weight: 600;
           letter-spacing: 0.12em;
           color: var(--tier-label, rgba(240, 181, 66, 0.78));
-          padding-left: 2px;
+          /* Small label plate: floating gold on TIDE's lit wall measured
+             4.05:1 (F7). The same backplate trick the pack rail already uses,
+             sized to the words so the control zone keeps its no-plank read.
+             align-self:flex-start keeps the plate as wide as the text. */
+          align-self: flex-start;
+          max-width: 100%;
+          background: rgba(6, 8, 12, 0.88);
+          border-radius: 5px;
+          padding: 0 5px;
         }
         .vend-stepper-cluster > .vend-stepper-row { gap: 6px !important; }
         /* Band 4 — money strip: text only, no wells, no borders, sitting ON the
@@ -1787,11 +2407,12 @@ export function VendingExperience(): React.ReactElement {
            back 1px of type per 20px of missing width — 9.5px at 360, which is
            the size the desktop plaque already uses for this same line — so the
            fit has ~30px of slack instead of landing exactly on the box edge.
-           Floored at 9px: even a 320px phone keeps it readable (measured 9px,
-           294px of text in a 300px box) rather than shrinking without limit. */
+           Floored at 9.5px (raised from 9px, F7): that is the size the desktop
+           plaque already uses for this same line, and the ramp reaches it
+           exactly at 360px — the narrowest phone in the gate set. */
         .vend-money-legal {
           font-family: "Geist Mono", ui-monospace, monospace;
-          font-size: clamp(9px, calc(11px - (390px - 100vw) / 20), 11px);
+          font-size: clamp(9.5px, calc(11px - (390px - 100vw) / 20), 11px);
           letter-spacing: 0.04em;
           color: #828c9c;
           line-height: 15px;
@@ -1835,6 +2456,70 @@ export function VendingExperience(): React.ReactElement {
              the four-item stack inside the fold (16->12px => ~46px tall). */
           .vend-cta { padding-top: 12px !important; padding-bottom: 12px !important; }
         }
+        /* ── F8 · DESKTOP: LAST VENDS inside the fold ────────────────────────
+           The tester had to scroll the page to see the history at all. The
+           control column is now viewport-aware: trimmed page padding, tighter
+           card rhythm and a column capped to the fold, with LAST VENDS holding
+           its own scroll so the list STARTS above the fold and the rest is
+           reachable inside the card instead of down the page. Complement of
+           the two max-width:940px blocks, so portrait and compact landscape
+           are untouched. */
+        @media (min-width: 941px) {
+          .vend-root { padding-top: 16px !important; padding-bottom: 20px !important; }
+          /* The STAGE keeps its full 560/520 track. Height-capping it to fit
+             the keypad inside a 1280x800 fold was measured and rejected: the
+             keypad needs 444px of width, which needs a 432px cabinet, which is
+             631px tall — so a laptop fold cannot hold cabinet + rail + panel at
+             once, and the cap only bought the fold by shrinking the hero
+             machine a quarter. The controls column is a SEPARATE grid column
+             starting at the top of the page, so LAST VENDS lands inside the
+             fold on its own; the panel's readout sits in the rail under the
+             glass (in the fold) with its keys just below it. */
+          .vend-card { padding: 11px 15px 10px !important; }
+          .vend-controls { gap: 9px !important; }
+          .vend-label { margin-bottom: 7px !important; padding-bottom: 5px !important; }
+          .vend-id-balance { margin-top: 8px !important; padding-top: 7px !important; }
+          .vend-id-legal { margin-top: 5px !important; }
+          .vend-machine-caption { margin-top: 6px !important; }
+          /* Newest first is the provider's order (settle prepends); the card
+             just stops growing and scrolls instead. */
+          .vend-history-scroll {
+            max-height: 92px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+          }
+        }
+        /* SHORT DESKTOPS (a 1280x800 laptop fold). */
+        @media (min-width: 941px) and (max-height: 900px) {
+          /* The cabinet also gives back the ~44px that puts the pack RAIL and
+             the code readout inside the fold. At 1280x800 the rail used to sit
+             entirely below it: the chips a vend produces, the VENDING x/y line
+             and the seed commit were all off-screen while the machine ran.
+             Same technique as portrait — the cabinet takes the height that is
+             left and derives its width through the 520/760 aspect (+40px arrow
+             gutter for the track). At 900px of viewport height the expression
+             already exceeds the native size, so nothing changes above this
+             breakpoint. */
+          .vend-shell {
+            grid-template-columns:
+              minmax(0, min(560px, calc((100dvh - 104px) * 0.6842 + 40px)))
+              320px;
+          }
+          /* !important: the turntable carries an inline max-width:520 (it owns
+             the aspect box), and an inline declaration outranks any selector. */
+          .vend-stage .vend-turntable {
+            max-width: min(520px, calc((100dvh - 104px) * 0.6842)) !important;
+          }
+          /* ...and the control column gives back its decorative pixels so the
+             WHOLE history card clears the fold, not just its first row: the
+             tagline (already dropped in compact landscape for the same
+             reason), one pixel of gap per card, and half the history window
+             (which keeps its own scroll for the rest). Measured at 1280x800:
+             card 634.5 -> 720.5, inside the 792 fold. */
+          .vend-id-sub { display: none !important; }
+          .vend-controls { gap: 8px !important; }
+          .vend-history-scroll { max-height: 46px; }
+        }
         .vend-stage { perspective: 1300px; }
         .rip-pack-in { animation: ripPackIn 550ms cubic-bezier(0.2, 1.2, 0.3, 1) both; }
         @keyframes ripPackIn {
@@ -1865,6 +2550,62 @@ export function VendingExperience(): React.ReactElement {
           44% { transform: translate(2px, 0) rotate(1.2deg); }
           58% { transform: translate(-1px, 1px) rotate(-0.6deg); }
           100% { transform: translate(0, 0) rotate(0deg); }
+        }
+        /* ── F4 beats. Every duration below is a module const interpolated in
+           from the RIP_* block, so the choreography has exactly one tuning
+           surface and no per-outcome branch can reach it (RG-C5). ────────── */
+        /* Anticipation: the pack compresses and settles low, loading the tear. */
+        .rip-hold { animation: ripHold ${RIP_HOLD_MS}ms cubic-bezier(0.4, 0, 0.5, 1) both; }
+        @keyframes ripHold {
+          0%   { transform: translateY(0) scale(1); }
+          55%  { transform: translateY(3px) scale(0.978); }
+          100% { transform: translateY(6px) scale(0.955); }
+        }
+        /* ...while a neutral ring closes in on it. */
+        .rip-anticipate { animation: ripAnticipate ${RIP_HOLD_MS}ms cubic-bezier(0.35, 0, 0.3, 1) both; }
+        @keyframes ripAnticipate {
+          0%   { transform: scale(1.55); opacity: 0; }
+          25%  { opacity: 0.55; }
+          100% { transform: scale(0.83); opacity: 1; }
+        }
+        /* Per-card micro hit-stop: the card lands oversized, HOLDS (the flat
+           45-78% plateau is the stop), then settles. Fires for every paying
+           card at exactly this size for exactly this long. */
+        .rip-hit { animation: ripHit ${RIP_HIT_MS}ms cubic-bezier(0.3, 0.9, 0.35, 1) both; }
+        @keyframes ripHit {
+          0%   { transform: scale(1); }
+          14%  { transform: scale(1.075); }
+          45%  { transform: scale(1.075); }
+          78%  { transform: scale(1.075); }
+          100% { transform: scale(1); }
+        }
+        /* Dud deflate: the empty card puffs a hair, then sags and gives up. */
+        .rip-deflate { animation: ripDeflate ${RIP_DUD_DEFLATE_MS}ms cubic-bezier(0.35, 0, 0.4, 1) both; }
+        @keyframes ripDeflate {
+          0%   { transform: scale(1.02) translateY(0); opacity: 1; }
+          22%  { transform: scale(1.02) translateY(0); opacity: 1; }
+          64%  { transform: scale(0.935) translateY(6px); opacity: 0.82; }
+          100% { transform: scale(0.965) translateY(3px); opacity: 0.9; }
+        }
+        /* Gold one-shot freeze-frame: the grid snaps up and HOLDS (the 12-72%
+           plateau is the held frame), then releases. */
+        .rip-freeze-hold { animation: ripFreezeHold ${RIP_GOLD_FREEZE_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+        @keyframes ripFreezeHold {
+          0%   { transform: scale(1); }
+          12%  { transform: scale(1.032); }
+          72%  { transform: scale(1.032); }
+          100% { transform: scale(1); }
+        }
+        .rip-goldfreeze { animation: ripGoldFreeze ${RIP_GOLD_FREEZE_MS}ms ease-out both; }
+        @keyframes ripGoldFreeze {
+          0%   { opacity: 0; }
+          10%  { opacity: 1; }
+          70%  { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .rip-hold, .rip-anticipate, .rip-hit, .rip-deflate,
+          .rip-freeze-hold, .rip-goldfreeze { animation: none !important; }
         }
         .rip-seam { animation: ripSeam ${RIP_TEAR_MS}ms ease-out both; }
         @keyframes ripSeam {
@@ -1910,7 +2651,7 @@ export function VendingExperience(): React.ReactElement {
               {/* Value only: the strip has no room for a unit at 390px, and
                   the currency is already stated on the PACK PRICE · USDC
                   control and throughout the receipt. */}
-              <span className="vend-topstrip-balval">{formatUsdc(state.balanceLamports)}</span>
+              <span className="vend-topstrip-balval">{formatUsdc(displayBalanceLamports)}</span>
             </span>
             {/* The chip is shared with the desktop column where it stretches;
                 this fit-content wrapper keeps it chip-sized in the strip. */}
@@ -2038,6 +2779,13 @@ export function VendingExperience(): React.ReactElement {
               alignItems: 'center',
               justifyContent: 'center',
               marginTop: 10,
+              // Same stacking layer as the code panel: in PORTRAIT the plateau
+              // disc overlaps this rail by 346.8x20.5px (measured 390x844), so
+              // the LED readout, the count and the CLEAR key were sitting under
+              // the same decorative wash. Above the disc, below settled (5) and
+              // the rip (6).
+              position: 'relative',
+              zIndex: 2,
               // Subtle backplate: the rail chips must read on the busy room
               // floor (autisk contrast nit).
               background: 'rgba(6, 8, 12, 0.55)',
@@ -2055,50 +2803,16 @@ export function VendingExperience(): React.ReactElement {
                   hidden={cutsceneOn && !reduced}
                 />
               ))}
-            {/* Slot-pick hint (ready only): calm, optional, no urgency. Lives in
-                the otherwise-empty rail so it never disturbs the tuned mobile
-                folds. */}
+            {/* The code bar (ready only, every layout): the LED readout and
+                the CLEAR key sit in the rail the old glass hint used, directly
+                under the glass, so the feature announces itself right where
+                the codes are punched — and the rail's height budget, which the
+                portrait cabinet size depends on, does not move. */}
             {phaseKind === 'ready' && slotPickOffered && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  flexWrap: 'wrap',
-                  justifyContent: 'center',
-                  fontFamily: T.mono,
-                  fontSize: 12,
-                  letterSpacing: '0.06em',
-                  color: T.dimLift,
-                }}
-              >
-                <span>PICK YOUR SLOTS · OPTIONAL</span>
-                <span style={{ color: selectedSlots.length > 0 ? T.cyan : T.dimLift, fontWeight: 700 }}>
-                  {selectedSlots.length} SELECTED
-                </span>
-                {selectedSlots.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSlots([])}
-                    aria-label="Clear slot selection"
-                    style={{
-                      fontFamily: T.mono,
-                      fontSize: 11,
-                      fontWeight: 600,
-                      letterSpacing: '0.06em',
-                      color: T.dimLift,
-                      background: 'transparent',
-                      border: `1px solid ${T.cardEdge}`,
-                      borderRadius: 7,
-                      padding: '4px 9px',
-                      minHeight: 28,
-                      cursor: 'pointer',
-                      touchAction: 'manipulation',
-                    }}
-                  >
-                    CLEAR
-                  </button>
-                )}
+              <div className="vend-codebar">
+                {codeReadout}
+                {codeCount}
+                {clearKey}
               </div>
             )}
             {phaseKind === 'vending' && (
@@ -2115,6 +2829,18 @@ export function VendingExperience(): React.ReactElement {
               </div>
             )}
           </div>
+          {/* DESKTOP / LANDSCAPE keypad panel: plaque material and real keys
+              under the readout, mounted in EVERY phase (the keys go dead
+              mid-round, the panel never disappears) so the stage height is
+              constant and nothing shifts when a vend starts. Portrait has no
+              keypad: nine 44px keys do not fit its chrome budget, and there
+              the glass cells ARE the keypad. */}
+          {!isPortrait && slotPickOffered && (
+            <div className="vend-codepanel" ref={codePanelRef}>
+              <span className="vend-codepanel-label">SLOT CODE · OPTIONAL · SHELF THEN COLUMN</span>
+              {keypad}
+            </div>
+          )}
           {state.phase.kind === 'settled' &&
             cutsceneOn &&
             !reduced &&
@@ -2174,6 +2900,7 @@ export function VendingExperience(): React.ReactElement {
             {/* Balance + compliance folded into the identity plaque so the
                 column never runs past the viewport. */}
             <div
+              className="vend-id-balance"
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -2187,10 +2914,11 @@ export function VendingExperience(): React.ReactElement {
             >
               <span>BALANCE</span>
               <span style={{ color: T.text, fontWeight: 700 }}>
-                {formatUsdc(state.balanceLamports)} USDC
+                {formatUsdc(displayBalanceLamports)} USDC
               </span>
             </div>
             <div
+              className="vend-id-legal"
               style={{
                 fontFamily: T.mono,
                 fontSize: 9.5,
@@ -2212,7 +2940,8 @@ export function VendingExperience(): React.ReactElement {
               className="vend-machine-caption"
               style={{
                 fontFamily: T.mono,
-                fontSize: 11,
+                // F7: an always-on line never renders under 12px.
+                fontSize: 12,
                 color: T.dim,
                 textAlign: 'center',
                 marginTop: 8,
@@ -2279,25 +3008,33 @@ export function VendingExperience(): React.ReactElement {
             </div>
           </Card>
 
-          {state.history.length > 0 && (
-            <Card>
+          {/* LAST VENDS — newest first, money first (F1), and viewport-aware
+              (F8): the card keeps its own scroll so the list START sits above
+              the desktop fold instead of running off the page. */}
+          {historyRows.length > 0 && (
+            <Card className="vend-card-history">
               <Label>LAST VENDS</Label>{/* money-machine history */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {state.history.slice(0, 8).map((h, i) => (
+              <div className="vend-history-scroll" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {historyRows.slice(0, 8).map((h, i) => (
                   <div
                     key={i}
                     style={{
                       fontFamily: T.mono,
                       fontSize: 12,
-                      fontWeight: 600,
-                      padding: '5px 9px',
+                      fontWeight: 700,
+                      lineHeight: '14px',
+                      textAlign: 'center',
+                      padding: '4px 8px',
                       borderRadius: 8,
                       border: `1px solid ${h.goldCount > 0 ? T.gold : T.cardEdge}`,
                       color: h.goldCount > 0 ? T.gold : h.won ? T.text : T.faint,
                     }}
                   >
-                    {formatMultiplier(h.aggregateBps)}
-                    {h.goldCount > 0 ? ` · ${h.goldCount}G` : ''}
+                    {formatUsdc(h.totalPayoutLamports)}
+                    <div style={{ fontSize: 10, lineHeight: '12px', fontWeight: 600, opacity: 0.8 }}>
+                      {formatMultiplier(h.aggregateBps)}
+                      {h.goldCount > 0 ? ` · ${h.goldCount}G` : ''}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2416,11 +3153,17 @@ export function VendingExperience(): React.ReactElement {
         aria-live="polite"
         style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}
       >
+        {/* F2: while the cutscene still holds the cards, the announcement says
+            the packs are opening — it must not read the total out loud before
+            a sighted player can see it. The total is announced when the reveal
+            completes, on the same beat as the balance. */}
         {phaseKind === 'vending'
           ? `Vending pack ${state.dispensed.length} of ${committedCount}`
-          : phaseKind === 'settled' && state.phase.kind === 'settled'
-            ? `Tray served. Total ${formatUsdc(state.phase.outcome.totalPayoutLamports)} USDC.`
-            : ''}
+          : revealPending
+            ? 'Opening your packs.'
+            : settledOutcome
+              ? `Tray served. Total ${formatUsdc(settledOutcome.totalPayoutLamports)} USDC.`
+              : ''}
       </span>
       {/* The provider paces packs at VEND_STEP_MS; keep the import live for
           integrators reading this file (the canvas choreography fits inside). */}
