@@ -87,3 +87,13 @@ game-flow journeys, mobile-touch (44px runtime targets), accessibility
 economy, Geist Mono, no em-dashes, quiet-expert copy). Evidence lands in
 `vending-run/shots-*`; verdicts go back to the orchestrator, fixes route to a
 maker, then BLIND re-verify with fresh probes.
+
+SLOP GATE (Tim, 2026-08-31, MANDATORY): any change that adds or edits
+user-facing copy, or touches fonts, must pass the stop-slop + humanizer
+skill review on the RENDERED text (not source greps) — extract every visible
+DOM string + computed font across ready/help/settled (probe pattern:
+`vending-run/_qa-slop-copy.mjs`; canvas-baked strings grepped separately),
+scan for em/en dashes, curly quotes, AI slop vocabulary, filler/hype, and
+require a 100% Geist / Geist Mono font census. Owned by
+swoobz-brand-cohesion-qa Probe 11; the orchestrator re-dispatches any brand
+verdict issued without it. Baseline 2026-08-31: 293 strings, 0 flags.
