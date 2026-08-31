@@ -1,0 +1,20 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist mono",
+        "createdAt": "2026-08-31T16:30:33.539Z",
+        "reason": "Swoobz brand standard: Geist Sans body + Geist Mono numerics (Tim's game-design standards; brand-cohesion QA enforces a 100 percent Geist census)"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-08-31T16:30:33.625Z",
+        "reason": "Swoobz brand standard: Geist Sans body + Geist Mono numerics (Tim's game-design standards)"
+      }
+    ]
+  }
+}

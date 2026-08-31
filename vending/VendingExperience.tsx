@@ -33,6 +33,7 @@ import {
   MAX_PACKS,
   MIN_PACKS,
   PACK_MAX_MULTIPLIER_BPS_BY_TIER,
+  settlePackPayout,
   TIER_ORDER,
 } from './vendingMath'
 import type { VendingTierId } from './vendingMath'
@@ -202,6 +203,10 @@ const TURNTABLE_RADIUS = 305
  *  feature is NOT OFFERED rather than offered too small (SPEC-PORTRAIT-0831
  *  "never below 337px canvas width", learning 18). */
 const SLOT_PICK_MIN_CANVAS_PX = 337
+/** Turntable arrow: its resting offset on the stage edge (negative = overhangs
+ *  the cabinet), and the closest it may ever come to the viewport edge. */
+const ARROW_REST_INSET = -8
+const ARROW_MIN_EDGE = 14
 
 const EMPTY_PACKS: readonly PackResult[] = []
 /** DOM chip pop is delayed to the canvas bay-landing beat
@@ -388,8 +393,17 @@ function SmallBtn({
         fontSize: 13,
         padding: '0 12px',
         flex: grow ? 1 : undefined,
+        // fb-d item 7: "MEDIUM" broke to two lines in the narrow landscape
+        // control column. The chip label is one word; it never wraps.
+        whiteSpace: 'nowrap',
         borderColor: active ? T.cyan : T.cardEdge,
-        background: active ? T.cyanDim : 'rgba(255,255,255,0.04)',
+        // fb-d item 4: both states were near-transparent (14% cyan / 4% white
+        // over nothing), so the back cabinet and the room wave read through
+        // CUTSCENE and the tier chips. The tint keeps its exact value and gets
+        // an opaque dark-glass plate underneath it.
+        background: active
+          ? `linear-gradient(0deg, ${T.cyanDim}, ${T.cyanDim}), rgba(8,11,16,0.94)`
+          : 'linear-gradient(0deg, rgba(255,255,255,0.04), rgba(255,255,255,0.04)), rgba(8,11,16,0.90)',
         color: active ? T.cyan : T.text,
         opacity: disabled ? 0.4 : 1,
       }}
@@ -505,6 +519,72 @@ const RIP_LAND_AT = 0.55
 const RIP_GOLD_FREEZE_MS = 620
 // Dud deflate: the empty card sags. Same duration every time, every rip.
 const RIP_DUD_DEFLATE_MS = 380
+// ── Card-face type metrics (fb-d item 1) ───────────────────────────────────
+// Geist Mono advance ratio, MEASURED on the live build: "+0.50" renders 45.8px
+// at 15px = 0.611em per character (probe _codotty-fbd-rip.mjs, 852x393). 0.62
+// carries the safety margin, so a fitted size can never land ON the box edge.
+const RIP_MONO_ADVANCE = 0.62
+// Breathing room inside a card face (both sides together).
+const RIP_CARD_TEXT_PAD = 4
+// Below this the factor line is dropped rather than rendered as sub-legible
+// noise; the money line then owns the whole face. The test is the CARD BOX, so
+// every card in a spread drops it together (RG-C5: class-identical, never
+// value-keyed).
+const RIP_FACTOR_MIN_FS = 8
+// Absolute floor. Containment wins over size: a value painting into the
+// NEIGHBOUR card misattributes an outcome, which is worse than small type.
+const RIP_VALUE_MIN_FS = 6
+// How far the torn lip's rotated bounding box reaches past the pack's own half
+// width (measured 360x740: a 105px half-width lip reached 145.2px, = 1.383).
+// The pack is scaled so that reach stays inside the rip layer instead of being
+// cut to a straight line by its overflow clip.
+const RIP_LIP_REACH = 1.39
+// Gutter kept between the lip's reach and the rip layer's rounded edge.
+const RIP_LIP_MARGIN = 10
+const RIP_PACK_W = 210
+const RIP_PACK_H = 300
+// ── Ribbon band budget (fb-e item 1) ───────────────────────────────────────
+// The total ribbon is pinned to the stage floor and the card grid was centred
+// with no knowledge of it, so on a short stage the grid grew straight through
+// it: at 852x393 the whole 30px payout line rendered BEHIND card rows 3-4 and
+// only the wrapped tail of the meta line was legible (measured pre-fix, probe
+// _codotty-fbe-measure.mjs: grid bottom 261.6 vs ribbon block top ~203.4).
+// The grid now sizes against a MEASURED band exactly like --vend-chrome does
+// for the portrait shell — the ribbon reports its own height, the grid gets
+// what is left. Every number here is geometry: no payout, multiplier or
+// outcome class is ever read (RG-C5).
+// Gap kept clear between the stage floor and the ribbon block (the SKIP key
+// lives in it: bottom 14 + its 44px box).
+const RIP_RIBBON_BOTTOM = 72
+// Gutter between the lowest card and the ribbon's first line.
+const RIP_RIBBON_CLEAR = 10
+// First-paint fallback until the ribbon has measured itself (one frame).
+// Sized to the worst case seen (852x393, three-line block) so the opening
+// frame errs toward too much room rather than an overlap.
+const RIP_RIBBON_H_FALLBACK = 84
+// Clearance kept above the grid for the "YOUR n PACKS · TIER" header. The
+// header is MEASURED (it is one line on a wide stage and two on a narrow one,
+// which is 15px of budget), so the floor is its own bottom plus a gutter
+// rather than a constant that has to assume the worst case everywhere.
+const RIP_HEADER_TOP = 14
+const RIP_HEADER_CLEAR = 10
+// Two-line worst case, so the first frame errs toward too much clearance.
+const RIP_HEADER_H_FALLBACK = 30
+// The card FACE paints marginally larger than the modelled card box (its
+// border sits outside the geometry). Reserved once, for the last row.
+const RIP_CARD_PAINT_MARGIN = 4
+// The vertical gap between card rows compresses before anything else does:
+// card WIDTH is what the fitted face type is derived from, so shrinking cards
+// to buy space would re-open the fb-d overflow the type floor exists to stop.
+const RIP_ROW_GAP_MIN = 4
+// Card aspect (height / width). Was an inline 1.4 in one place; it is read
+// twice now (the box, and the height budget that caps it).
+const RIP_CARD_AR = 1.4
+// Below this stage width the ribbon's meta line ("<factor> · NET <delta>") is
+// given its own row instead of trailing the payout inline — inline it wrapped
+// to three lines and the block ate 111px of a 386px stage. Stage WIDTH only:
+// the same decision is taken for every outcome at a given viewport.
+const RIP_META_INLINE_MIN_W = 320
 
 /** ONE ceremonial rip for the whole buy: the booster floats up, the lip tears
  *  off, and ALL cards fan out of the pack into a grid, then flip face-up in a
@@ -545,9 +625,47 @@ function PackRipCutscene({
   // element is offset by this instead, which moves the CONTROLS up without
   // touching the card geometry. 0 in portrait, where nothing scrolls.
   const [foldInset, setFoldInset] = useState(0)
+  // Measured height of the total-ribbon block (fb-e item 1). It is the ONE
+  // input the grid budget cannot derive: the block wraps differently per stage
+  // width, so it reports itself the way the money strip reports --vend-strip.
+  const ribbonRef = useRef<HTMLDivElement | null>(null)
+  const [ribbonH, setRibbonH] = useState(RIP_RIBBON_H_FALLBACK)
+  // Same for the header: it wraps to two lines on a narrow stage.
+  const headerRef = useRef<HTMLDivElement | null>(null)
+  const [headerH, setHeaderH] = useState(RIP_HEADER_H_FALLBACK)
+  useEffect(() => {
+    const pairs: Array<[HTMLElement | null, (h: number) => void]> = [
+      [ribbonRef.current, (h) => setRibbonH(Math.ceil(h))],
+      [headerRef.current, (h) => setHeaderH(Math.ceil(h))],
+    ]
+    const ros: ResizeObserver[] = []
+    for (const [el, set] of pairs) {
+      if (!el) continue
+      const read = (): void => {
+        const h = el.getBoundingClientRect().height
+        if (h > 0) set(h)
+      }
+      read()
+      const ro = new ResizeObserver(read)
+      ro.observe(el)
+      ros.push(ro)
+    }
+    return () => ros.forEach((ro) => ro.disconnect())
+  }, [])
   useEffect(() => {
     const el = rootRef.current
-    if (el && el.clientWidth > 0) setBox({ w: el.clientWidth, h: el.clientHeight })
+    const readBox = (): void => {
+      const node = rootRef.current
+      if (node && node.clientWidth > 0) setBox({ w: node.clientWidth, h: node.clientHeight })
+    }
+    readBox()
+    // fb-e item 1: this used to be a ONE-SHOT read at mount, and at mount the
+    // layer is still taller than it ends up — the code panel's --vend-panel-h
+    // and the money strip's --vend-strip land a frame later. The stale height
+    // was 12-16px optimistic, which is exactly the slack the ribbon budget
+    // below needs to be honest about. The box now tracks the real element.
+    const boxRo = el ? new ResizeObserver(readBox) : null
+    if (el && boxRo) boxRo.observe(el)
     const measureFold = (): void => {
       const node = rootRef.current
       if (!node) return
@@ -558,6 +676,7 @@ function PackRipCutscene({
     window.addEventListener('resize', measureFold)
     window.addEventListener('scroll', measureFold, { passive: true })
     return () => {
+      boxRo?.disconnect()
       window.removeEventListener('resize', measureFold)
       window.removeEventListener('scroll', measureFold)
     }
@@ -566,20 +685,106 @@ function PackRipCutscene({
   const hasGold = outcome.packs.some((p) => p.cls === 'gold')
   const packImg = RIP_PACK_SRC[tier]
 
+  // Worst-case face-value width for THIS BET (fb-d item 1): the chosen price
+  // at this machine's published ceiling, never the card's own value — so the
+  // whole spread is laid out identically whatever it pays (RG-C5). It is
+  // computed here because the card BOX now has to respect it too.
+  const wagerPerPack = n > 0 ? outcome.totalWagerLamports / BigInt(n) : 0n
+  const worstPayout = settlePackPayout(wagerPerPack, PACK_MAX_MULTIPLIER_BPS_BY_TIER[tier])
+  const valueChars = Math.max(
+    RANGE_STYLE.empty.label.length,
+    `+${formatUsdc(worstPayout)}`.length,
+  )
+
   // Grid geometry (computed, deterministic): up to 5 columns, cards sized to
   // fit the measured stage; the whole spread stays inside the machine column.
   const cols = Math.min(n, 5)
   const rows = Math.ceil(n / cols)
   const gap = 10
   const stageW = Math.min(box.w, 560)
-  const cardW = Math.min(rows <= 1 ? 150 : 118, Math.floor((stageW - 24 - gap * (cols - 1)) / cols))
-  const cardH = Math.round(cardW * 1.4)
+  const cardWByWidth = Math.min(
+    rows <= 1 ? 150 : 118,
+    Math.floor((stageW - 24 - gap * (cols - 1)) / cols),
+  )
+  // ── Grid vs ribbon: a measured budget, not a hope (fb-e item 1) ──────────
+  // The ribbon owns the bottom band; the grid gets the rest. Three levers, in
+  // the order that costs the player least:
+  //   1. the ROW gap compresses (down to RIP_ROW_GAP_MIN) — card boxes and the
+  //      face type are untouched;
+  //   2. the card box itself is capped by the HARD line (the band without its
+  //      courtesy gutter), but never below the width the face type needs at its
+  //      floor — containment of a value inside its own card outranks the
+  //      gutter (fb-d item 1);
+  //   3. the grid top is clamped so the last row cannot cross the band even if
+  //      1 and 2 have both bottomed out.
+  const visibleH = Math.max(0, box.h - foldInset)
+  const gridTopMin = RIP_HEADER_TOP + headerH + RIP_HEADER_CLEAR
+  const ribbonBand = ribbonH + RIP_RIBBON_BOTTOM + RIP_RIBBON_CLEAR
+  const maxGridH = Math.max(0, visibleH - gridTopMin - ribbonBand)
+  // The line the grid may never cross: the ribbon's own box, gutter spent.
+  const hardGridH = Math.max(
+    0,
+    visibleH - gridTopMin - ribbonH - RIP_RIBBON_BOTTOM - RIP_CARD_PAINT_MARGIN,
+  )
+  // Narrowest card that still holds the worst-case face value at the type
+  // floor (same budget the type itself is fitted to, below).
+  const cardWTypeMin =
+    Math.ceil(valueChars * RIP_VALUE_MIN_FS * RIP_MONO_ADVANCE) + RIP_CARD_TEXT_PAD
+  const cardHBudget = Math.floor((hardGridH - (rows - 1) * RIP_ROW_GAP_MIN) / rows)
+  const cardW = Math.min(
+    cardWByWidth,
+    Math.max(Math.floor(cardHBudget / RIP_CARD_AR), cardWTypeMin),
+  )
+  const cardH = Math.round(cardW * RIP_CARD_AR)
   const gridW = cols * cardW + (cols - 1) * gap
-  const gridH = rows * cardH + (rows - 1) * gap
+  const naturalGridH = rows * cardH + (rows - 1) * gap
+  const rowGap =
+    rows > 1 && naturalGridH > maxGridH
+      ? Math.max(
+          RIP_ROW_GAP_MIN,
+          Math.min(gap, Math.floor((maxGridH - rows * cardH) / (rows - 1))),
+        )
+      : gap
+  const gridH = rows * cardH + (rows - 1) * rowGap
   // Centre the spread in the VISIBLE part of the stage, not the whole stage:
   // the card size is untouched, the grid just stops being centred on pixels
   // the player cannot see.
-  const gridTop = Math.max(54, Math.round((box.h - foldInset - gridH) / 2) - 30)
+  const gridTop = Math.max(
+    gridTopMin,
+    Math.min(
+      Math.round((visibleH - gridH) / 2) - 30,
+      visibleH - ribbonH - RIP_RIBBON_BOTTOM - RIP_CARD_PAINT_MARGIN - gridH,
+    ),
+  )
+
+  // ── Card-face type, sized from the CARD BOX (fb-d item 1) ────────────────
+  // The character budget is the WORST CASE FOR THIS BET — the chosen price at
+  // this machine's published ceiling — not the card's own value. So every card
+  // in a spread is styled identically and the type size leaks nothing about the
+  // outcome (RG-C5), while still being guaranteed to fit.
+  //
+  // This is the path the F1 work intended; what let landscape and small
+  // portrait escape it was the Math.max(15/12, ...) FLOOR underneath the
+  // box-derived expression. At 852x393 the stage column is 209px, so cardW
+  // measures 29px and the floor forced 15px type into it: "+0.50" rendered
+  // 45.8px, i.e. 16.8px painted into the neighbouring cards, and "EMPTY" was
+  // clipped to "EMPT" (measured pre-fix, 36 of 40 lines overflowing).
+  // (valueChars is computed above the grid geometry — the card box is sized
+  // against it now, so it has to exist first.)
+  const factorChars = formatMultiplier(PACK_MAX_MULTIPLIER_BPS_BY_TIER[tier]).length
+  const fitFs = (chars: number): number =>
+    Math.floor((cardW - RIP_CARD_TEXT_PAD) / (chars * RIP_MONO_ADVANCE))
+  // The old 0.18 / 0.115 ratios stay as the CAP (they are the intended look on
+  // a roomy card); the fit is what binds on a narrow one.
+  const valueFs = Math.max(RIP_VALUE_MIN_FS, Math.min(Math.round(cardW * 0.18), fitFs(valueChars)))
+  const factorFsFit = Math.min(Math.round(cardW * 0.115), fitFs(factorChars))
+  const showFactor = factorFsFit >= RIP_FACTOR_MIN_FS
+  // Pack art scaled so the torn lip's rotated reach stays inside the rip
+  // layer's rounded clip (fb-d item 6).
+  const packScale = Math.min(
+    1,
+    (stageW / 2 - RIP_LIP_MARGIN) / ((RIP_PACK_W / 2) * RIP_LIP_REACH),
+  )
 
   const clearTimers = (): void => {
     timers.current.forEach((t) => window.clearTimeout(t))
@@ -718,19 +923,36 @@ function PackRipCutscene({
       }}
     >
       <div
+        ref={headerRef}
         style={{
           position: 'absolute',
-          top: 14,
+          top: RIP_HEADER_TOP,
           left: 0,
           right: 0,
+          // fb-e item 3: the pack layer is zIndex 2 and the torn lip inside it
+          // is 3, so the flying lip painted straight over this caption. The
+          // header is UI, the peel is art — the caption sits above it. Pure
+          // paint order: no RIP_* timing or geometry is touched, and clicks
+          // still fall through to the root's fast-forward (it is not a
+          // control, so the event bubbles).
+          zIndex: 4,
           textAlign: 'center',
           fontFamily: T.mono,
           fontSize: 12,
           letterSpacing: '0.18em',
           color: T.dim,
+          // fb-d item 10: in landscape this wrapped and left "· TIDE" alone on
+          // line 2. The tier token is ONE word to a reader, so the line breaks
+          // only at the separator BEFORE it, never inside it; letter-spacing
+          // steps down instead of wrapping when the stage is narrow.
+          padding: '0 10px',
+          lineHeight: '15px',
         }}
       >
-        {n === 1 ? 'YOUR PACK' : `YOUR ${n} PACKS`} · {outcome.tierLabel}
+        <span style={{ whiteSpace: 'nowrap' }}>
+          {n === 1 ? 'YOUR PACK' : `YOUR ${n} PACKS`}
+        </span>{' '}
+        <span style={{ whiteSpace: 'nowrap' }}>· {outcome.tierLabel}</span>
       </div>
       <button
         type="button"
@@ -763,12 +985,21 @@ function PackRipCutscene({
           position: 'absolute',
           left: '50%',
           top: '38%',
-          width: 210,
-          height: 300,
-          marginLeft: -105,
-          marginTop: -150,
+          width: RIP_PACK_W,
+          height: RIP_PACK_H,
+          marginLeft: -RIP_PACK_W / 2,
+          marginTop: -RIP_PACK_H / 2,
           zIndex: 2,
           pointerEvents: 'none',
+          // fb-d item 6: the pack art was a FIXED 210x300 inside a stage that
+          // scales. On a narrow stage the torn lip's rotated bounding box ran
+          // past the rip layer's edge and its overflow:hidden cut the lip to a
+          // dead-straight vertical line (measured 360x740: 7.2px past the
+          // right edge). Scaling the pack to the measured stage keeps the whole
+          // peel inside the rounded clip, so nothing is razored. The lip's own
+          // straight top edge is in the ASSET and stays an art backlog item.
+          transform: `scale(${packScale})`,
+          transformOrigin: 'center center',
         }}
       >
         {/* Lip strip: grip → tear-snap → long visible flight (fade only at
@@ -906,7 +1137,7 @@ function PackRipCutscene({
           const col = i % cols
           const row = Math.floor(i / cols)
           const x = col * (cardW + gap)
-          const y = row * (cardH + gap)
+          const y = row * (cardH + rowGap)
           // Fly-from-pack offset (pack mouth sits ~38% height, centered).
           const fromX = gridW / 2 - x - cardW / 2
           const fromY = 760 * 0.38 - gridTop - y - cardH / 2
@@ -1050,6 +1281,12 @@ function PackRipCutscene({
                   are derived from the card box alone (never from the value),
                   so every card in a spread is styled identically (RG-C2). */}
               <div
+                // Stable hooks so a probe can measure the TEXT box itself. The
+                // card wrapper is not measurable for this: its scrollWidth
+                // carries the back image's 2px borders (width:100% + border on
+                // a content-box img = cardW+4) and reads as a permanent 4px
+                // overflow that has nothing to do with the type.
+                className="rip-card-value"
                 style={{
                   position: 'absolute',
                   left: 0,
@@ -1058,26 +1295,51 @@ function PackRipCutscene({
                   textAlign: 'center',
                   fontFamily: T.mono,
                   fontWeight: 800,
-                  fontSize: Math.max(15, Math.round(cardW * 0.18)),
+                  fontSize: valueFs,
                   lineHeight: 1.15,
+                  // Fitted by construction; nowrap + hidden is the belt to that
+                  // brace, so a font fallback can never re-open the overflow.
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
                   color: rs.color,
-                  textShadow: '0 2px 8px rgba(0,0,0,0.9)',
+                  // fb-d item 8: GOLD gets a plaque behind the digits. On the
+                  // gold face the value is dark type over a bright wave plus
+                  // the freeze-frame rays, and it disappeared. Keyed to the
+                  // range CLASS, so it is identical for every gold card and
+                  // for every gold value (RG-C5) — a 5x and a 100x gold wear
+                  // exactly the same plate.
+                  background:
+                    range === 'gold'
+                      ? 'linear-gradient(180deg, rgba(6,8,12,0.82) 0%, rgba(6,8,12,0.93) 100%)'
+                      : undefined,
+                  borderRadius: range === 'gold' ? 6 : undefined,
+                  paddingTop: range === 'gold' ? 2 : undefined,
+                  paddingBottom: range === 'gold' ? 3 : undefined,
+                  textShadow:
+                    range === 'gold'
+                      ? '0 1px 2px rgba(0,0,0,1), 0 0 6px rgba(0,0,0,0.9)'
+                      : '0 2px 8px rgba(0,0,0,0.9)',
                   opacity: flipped ? 1 : 0,
                   transform: flipped ? 'scale(1)' : 'scale(1.6)',
                   transition: `opacity 240ms ease ${flipDelay + RIP_FLIP_MS * 0.6}ms, transform 240ms cubic-bezier(0.2, 1.4, 0.3, 1) ${flipDelay + RIP_FLIP_MS * 0.6}ms`,
                 }}
               >
-                {p.multiplierBps === 0n ? 'EMPTY' : `+${formatUsdc(p.payoutLamports)}`}
-                <div
-                  style={{
-                    fontWeight: 600,
-                    fontSize: Math.max(12, Math.round(cardW * 0.115)),
-                    lineHeight: 1.25,
-                    opacity: p.multiplierBps === 0n ? 0 : 0.82,
-                  }}
-                >
-                  {p.multiplierBps === 0n ? ' ' : formatMultiplier(p.multiplierBps)}
-                </div>
+                {p.multiplierBps === 0n ? RANGE_STYLE.empty.label : `+${formatUsdc(p.payoutLamports)}`}
+                {showFactor && (
+                  <div
+                    className="rip-card-factor"
+                    style={{
+                      fontWeight: 600,
+                      fontSize: factorFsFit,
+                      lineHeight: 1.25,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      opacity: p.multiplierBps === 0n ? 0 : 0.82,
+                    }}
+                  >
+                    {p.multiplierBps === 0n ? ' ' : formatMultiplier(p.multiplierBps)}
+                  </div>
+                )}
               </div>
              </div>
             </div>
@@ -1104,13 +1366,16 @@ function PackRipCutscene({
         />
       )}
 
-      {/* Total ribbon once everything is face-up. */}
+      {/* Total ribbon once everything is face-up. It measures itself (fb-e
+          item 1): the grid above budgets against that height instead of
+          growing through it. */}
       <div
+        ref={ribbonRef}
         style={{
           position: 'absolute',
           left: 0,
           right: 0,
-          bottom: 72 + foldInset,
+          bottom: RIP_RIBBON_BOTTOM + foldInset,
           textAlign: 'center',
           fontFamily: T.mono,
           fontWeight: 800,
@@ -1124,7 +1389,17 @@ function PackRipCutscene({
         }}
       >
         {formatUsdc(outcome.totalPayoutLamports)}
-        <span style={{ fontSize: 13, color: T.dim, marginLeft: 10 }}>
+        {/* On a narrow stage the meta takes its own row: trailing the payout
+            inline it wrapped to three lines and the block grew past the space
+            the grid had to give it. The test is the STAGE WIDTH — identical
+            for every outcome at a given viewport (RG-C5). */}
+        <span
+          style={
+            stageW < RIP_META_INLINE_MIN_W
+              ? { display: 'block', fontSize: 13, color: T.dim, marginTop: 2 }
+              : { fontSize: 13, color: T.dim, marginLeft: 10 }
+          }
+        >
           {formatMultiplier(outcome.aggregateBps)} · NET{' '}
           {outcome.totalPayoutLamports >= outcome.totalWagerLamports
             ? `+${formatUsdc(outcome.totalPayoutLamports - outcome.totalWagerLamports)}`
@@ -1149,6 +1424,46 @@ function PackRipCutscene({
 
 // ── Settled receipt (Glass Box) ─────────────────────────────────────────────
 
+// fb-e item 2: the verify summary wrapped to two lines at 852x393, where the
+// receipt column measures 182px and the full line needs ~252px at its default
+// 11px/0.12em. It is the round's PROOF line, so it reads as ONE line on every
+// viewport. The ladder is ordered by what costs the reader least: the long
+// wording at full size first, then the short wording at full size, and only
+// then the size/tracking steps. Each rung is CHOSEN because it fits the
+// MEASURED column — nothing is ever clipped, and nowrap is just the belt to
+// that brace. Tracking is decoration and is spent FIRST, so the full wording
+// survives everywhere it can: desktop, 412 and 390 keep the original
+// 11px/0.12em, 360 keeps the same words at tighter tracking, and only the
+// 182px landscape column falls back to the short wording (still 11px).
+const VERIFY_FS_STEPS = [11, 10, 9] as const
+const VERIFY_LS_STEPS = [0.12, 0.06, 0.02] as const
+// Inline space the default <summary> disclosure marker takes out of the first
+// line. Kept as a budget so the affordance survives the fit.
+const VERIFY_MARKER_W = 16
+type VerifyFit = { label: string; fs: number; ls: number }
+function fitVerifyLine(long: string, short: string, boxW: number): VerifyFit {
+  const base = { label: long, fs: VERIFY_FS_STEPS[0], ls: VERIFY_LS_STEPS[0] }
+  const avail = boxW - VERIFY_MARKER_W
+  if (avail <= 0) return base
+  const fits = (s: string, fs: number, ls: number): boolean =>
+    s.length * fs * (RIP_MONO_ADVANCE + ls) <= avail
+  // 1. the full wording at full size, buying room from the tracking only.
+  for (const ls of VERIFY_LS_STEPS) {
+    if (fits(long, VERIFY_FS_STEPS[0], ls)) return { label: long, fs: VERIFY_FS_STEPS[0], ls }
+  }
+  // 2. then the short wording, again largest-first.
+  for (const fs of VERIFY_FS_STEPS) {
+    for (const ls of VERIFY_LS_STEPS) {
+      if (fits(short, fs, ls)) return { label: short, fs, ls }
+    }
+  }
+  return {
+    label: short,
+    fs: VERIFY_FS_STEPS[VERIFY_FS_STEPS.length - 1],
+    ls: VERIFY_LS_STEPS[VERIFY_LS_STEPS.length - 1],
+  }
+}
+
 function SettledPanel({
   outcome,
   onCollect,
@@ -1160,9 +1475,38 @@ function SettledPanel({
   // against the commit and re-derive every pack's roll through the SAME
   // public derivation; the receipt then carries a live ✓, not just a claim.
   const [verified, setVerified] = useState<boolean | null>(null)
+  // Measured width of the receipt column, for the one-line verify summary.
+  const verifyRef = useRef<HTMLDetailsElement | null>(null)
+  const [verifyBoxW, setVerifyBoxW] = useState(0)
+  useEffect(() => {
+    const el = verifyRef.current
+    if (!el) return
+    const read = (): void => setVerifyBoxW(el.getBoundingClientRect().width)
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   // A NET WIN is payout >= stake — never "payout > 0" (RG-C2: a partial return
   // is a loss and must not wear win styling).
   const netWin = outcome.totalPayoutLamports >= outcome.totalWagerLamports
+  // One-line verify summary, fitted to the measured receipt column (fb-e
+  // item 2). Keyed to the VERIFICATION state and the column width only — it
+  // never reads the payout, so a win and a loss wear the identical line.
+  const verifyFit = fitVerifyLine(
+    verified === true
+      ? '✓ ROUND VERIFIED · VIEW RECEIPT'
+      : verified === false
+        ? '! VERIFICATION MISMATCH · VIEW RECEIPT'
+        : 'VERIFYING ROUND… · VIEW RECEIPT',
+    verified === true
+      ? '✓ VERIFIED · RECEIPT'
+      : verified === false
+        ? '! MISMATCH · RECEIPT'
+        : 'VERIFYING… · RECEIPT',
+    verifyBoxW,
+  )
+  const verifyLabel = verifyFit.label
   useEffect(() => {
     let alive = true
     void (async () => {
@@ -1194,8 +1538,41 @@ function SettledPanel({
       alive = false
     }
   }, [outcome])
+  // ── Fit the receipt to the VISIBLE viewport (fb-d item 2) ────────────────
+  // The panel is an absolute child of the stage box, and that box is taller
+  // than the fold on a laptop and on compact landscape. maxHeight:92% of the
+  // BOX therefore sized the card against pixels the player cannot see, and
+  // COLLECT — the only way out of the settled phase — landed below the fold at
+  // 852x393 and behind the portrait control band at 360x740 (measured
+  // [59,651,242x48], centre tap eaten by .vend-portrait-row). The card is now
+  // capped by the on-screen band instead, with COLLECT pinned inside it.
+  const overlayRef = useRef<HTMLDivElement | null>(null)
+  const [fit, setFit] = useState({ h: 0, shift: 0 })
+  useEffect(() => {
+    const measure = (): void => {
+      const node = overlayRef.current
+      if (!node) return
+      const r = node.getBoundingClientRect()
+      const top = Math.max(r.top, 0)
+      const bottom = Math.min(r.bottom, window.innerHeight)
+      // Centre on the VISIBLE band, not on the (taller) stage box: centring on
+      // the box is what pushed COLLECT off-screen in the first place.
+      setFit({
+        h: Math.max(0, Math.round(bottom - top)),
+        shift: Math.round((top + bottom) / 2 - (r.top + r.bottom) / 2),
+      })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, { passive: true })
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure)
+    }
+  }, [])
   return (
     <div
+      ref={overlayRef}
       style={{
         position: 'absolute',
         top: 0,
@@ -1218,8 +1595,15 @@ function SettledPanel({
       <Card
         style={{
           width: 'min(430px, 92%)',
-          maxHeight: '92%',
-          overflowY: 'auto',
+          // Capped by what is ON SCREEN, and shifted onto the visible band.
+          maxHeight: fit.h > 0 ? Math.max(160, fit.h - 16) : '92%',
+          transform: fit.shift !== 0 ? `translateY(${fit.shift}px)` : undefined,
+          // The CARD no longer scrolls as a whole — the receipt body does,
+          // inside it, so COLLECT stays pinned in view (fb-d item 2).
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
           position: 'relative',
           // Bolted-plaque treatment (HUD-as-signage, matches the machine's
           // info panel): inset bevel + corner rivets — identical for every
@@ -1246,9 +1630,21 @@ function SettledPanel({
               background: 'rgba(122,134,152,0.5)',
               boxShadow: 'inset 0 1px 1px rgba(0,0,0,0.6)',
               ...pos,
+              zIndex: 1,
             }}
           />
         ))}
+        {/* Receipt body: the ONLY scrolling region. Everything the player can
+            read scrolls here; the way OUT (COLLECT) is a sibling below, so it
+            can never be scrolled or folded away. */}
+        <div
+          style={{
+            flex: '1 1 auto',
+            minHeight: 0,
+            overflowY: 'auto',
+            overscrollBehavior: 'contain',
+          }}
+        >
         {/* F3 — the verdict in one glance. Eyebrow reads the outcome CLASS
             (gold present / tray paid / tray empty), never the size of the
             number; it is the same neutral type in all three cases. */}
@@ -1326,37 +1722,20 @@ function SettledPanel({
             <PackChip key={p.packIndex} pack={p} />
           ))}
         </div>
-        <button
-          type="button"
-          onClick={onCollect}
-          style={{
-            ...btnBase,
-            width: '100%',
-            fontSize: 15,
-            padding: '13px 0',
-            borderColor: T.cyan,
-            background: T.cyanDim,
-            color: T.cyan,
-            letterSpacing: '0.1em',
-          }}
-        >
-          COLLECT
-        </button>
-        <details style={{ marginTop: 12 }}>
+        <details ref={verifyRef} style={{ marginTop: 12 }}>
           <summary
             style={{
               fontFamily: T.mono,
-              fontSize: 11,
-              letterSpacing: '0.12em',
+              fontSize: verifyFit.fs,
+              letterSpacing: `${verifyFit.ls}em`,
               color: verified === true ? T.cyan : verified === false ? '#e5484d' : T.faint,
               cursor: 'pointer',
+              // Fitted by construction (see fitVerifyLine); nowrap is the belt
+              // so a font fallback cannot re-open the two-line wrap.
+              whiteSpace: 'nowrap',
             }}
           >
-            {verified === true
-              ? '✓ ROUND VERIFIED · VIEW RECEIPT'
-              : verified === false
-                ? '! VERIFICATION MISMATCH · VIEW RECEIPT'
-                : 'VERIFYING ROUND… · VIEW RECEIPT'}
+            {verifyLabel}
           </summary>
           <div style={{ fontFamily: T.mono, fontSize: 11, color: T.dim, lineHeight: 1.7, marginTop: 8, wordBreak: 'break-all' }}>
             <div>round: {outcome.roundIdHex}</div>
@@ -1374,6 +1753,31 @@ function SettledPanel({
             ))}
           </div>
         </details>
+        </div>
+        {/* COLLECT: pinned to the panel floor, outside the scroller. It is the
+            only exit from the settled phase, so it is never allowed to sit
+            below a fold or behind the control band. */}
+        <button
+          type="button"
+          onClick={onCollect}
+          style={{
+            ...btnBase,
+            flex: '0 0 auto',
+            width: '100%',
+            marginTop: 12,
+            fontSize: 15,
+            padding: '13px 0',
+            borderColor: T.cyan,
+            // Opaque base under the cyan wash: the receipt sits over the lit
+            // cabinet, and a translucent CTA let the coils read through it
+            // (same paint lesson as the plateau disc, fb-d item 4).
+            background: `linear-gradient(0deg, ${T.cyanDim}, ${T.cyanDim}), rgba(8,11,16,0.94)`,
+            color: T.cyan,
+            letterSpacing: '0.1em',
+          }}
+        >
+          COLLECT
+        </button>
       </Card>
     </div>
   )
@@ -1497,6 +1901,18 @@ export function VendingExperience(): React.ReactElement {
   const [stageCanvasW, setStageCanvasW] = useState(0)
   const [moneyStripH, setMoneyStripH] = useState(0)
   const [codePanelH, setCodePanelH] = useState(0)
+  // fb-d item 10: the turntable arrows sit at -8px on the STAGE, which is the
+  // right rule while the stage is height-capped and therefore narrower than its
+  // column (390x844: stage left 21.6 -> arrow lands on 13.6). At 412x915 the
+  // stage is capped by WIDTH instead, so it fills the column and the same -8
+  // put the left arrow on x=0.3, flush against the screen edge.
+  //
+  // Shrinking the stage to buy the gutter was measured and REJECTED: at 390 the
+  // canvas is 346.9px against the 337px slot-pick touch floor, so a 28px
+  // reserve would take 390 below it and silently kill hand-picking. The ARROW
+  // moves instead — clamped so it can never come closer than ARROW_MIN_EDGE to
+  // the viewport, and otherwise still hugging the cabinet exactly as before.
+  const [arrowInset, setArrowInset] = useState(ARROW_REST_INSET)
   const slotPickOffered = !compactLandscape && stageCanvasW >= SLOT_PICK_MIN_CANVAS_PX
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return
@@ -1505,8 +1921,19 @@ export function VendingExperience(): React.ReactElement {
         // border-box via the live rect: contentRect would drop the strip's
         // own padding (including the safe-area inset) from the reserve.
         const h = e.target.getBoundingClientRect()
-        if (e.target === turntableRef.current) setStageCanvasW(Math.round(h.width))
-        else if (e.target === codePanelRef.current) setCodePanelH(Math.round(h.height))
+        if (e.target === turntableRef.current) {
+          setStageCanvasW(Math.round(h.width))
+          // Re-clamp the arrow gutter off the same live geometry (item 10).
+          const stage = stageRef.current
+          if (stage) {
+            const sr = stage.getBoundingClientRect()
+            const needLeft = ARROW_MIN_EDGE - sr.left
+            const needRight = ARROW_MIN_EDGE - (window.innerWidth - sr.right)
+            setArrowInset(
+              Math.max(ARROW_REST_INSET, Math.round(Math.max(needLeft, needRight))),
+            )
+          }
+        } else if (e.target === codePanelRef.current) setCodePanelH(Math.round(h.height))
         else setMoneyStripH(Math.round(h.height))
       }
     })
@@ -1656,6 +2083,13 @@ export function VendingExperience(): React.ReactElement {
   // portrait single-screen bands). Same handlers, same aria labels, same
   // aria-pressed state, same keyboard behaviour in both — the trees cannot
   // drift apart, and nothing is "reachable on desktop only".
+  // Does the pack rail actually host anything right now? (fb-d item 5.) The
+  // three things that can live in it: the pack chips, the ready-phase code bar
+  // and the vending status/seed line.
+  const railHasContent =
+    (phaseKind !== 'settled' && railPacks.length > 0) ||
+    (phaseKind === 'ready' && slotPickOffered) ||
+    phaseKind === 'vending'
   const helpButton = (
     <button
       type="button"
@@ -1725,7 +2159,15 @@ export function VendingExperience(): React.ReactElement {
       style={(() => {
         const live = phaseKind === 'vending' || c.canVend
         const accent = T.cyan
-        const wash = 'linear-gradient(180deg, rgba(0,240,255,0.18), rgba(0,240,255,0.07))'
+        // fb-d item 4: the wash alone is 7-18% cyan over NOTHING, so the lit
+        // back cabinet painted straight through the primary CTA — its bright
+        // edge and two coil circles read inside the button at 1280x800 and
+        // 852x393. The tint now sits on an opaque dark-glass plate, so the
+        // rendered colour is what the design intended instead of whatever the
+        // machine happens to be behind it. Same paint lesson as the plateau
+        // disc; the cyan values are unchanged.
+        const wash =
+          'linear-gradient(180deg, rgba(0,240,255,0.18), rgba(0,240,255,0.07)), rgba(8,11,16,0.94)'
         const halo = '0 0 18px rgba(0,240,255,0.22), inset 0 1px 0 rgba(255,255,255,0.14)'
         return {
           ...btnBase,
@@ -2138,6 +2580,16 @@ export function VendingExperience(): React.ReactElement {
           .vend-codebar .vend-key-clear {
             min-height: 48px;
             min-width: 0;
+            /* NB (fb-d item 10, investigated and dismissed): a scrollWidth-vs-
+               clientWidth sweep reports a 2px overflow on this key (60 vs 58)
+               and it reads like a letter overhang. It is not. Neutralising the
+               ::before face below (left/right 0 instead of -1.5px) drops
+               scrollWidth to exactly 58 — the 2px IS the decorative face, which
+               overhangs the padding box on purpose so it lands on the old
+               61.4x30 rectangle. The text measures 38.41px in a 38.41px content
+               box. Do not "fix" this by adding padding: padding grows
+               scrollWidth and clientWidth together and moves the pair to 64/62
+               with the same +2, while making the key wider for nothing. */
             padding: 0 10px;
             margin: -9px 0;
             /* Own stacking context so the z-index:-1 face cannot fall behind
@@ -2353,6 +2805,32 @@ export function VendingExperience(): React.ReactElement {
           text-align: center;
           line-height: 14px;
         }
+        /* Desktop / landscape twin of the portrait slot (fb-d item 3). Height
+           is reserved in every state, so nothing reflows when the line appears
+           or disappears; nowrap plus a font step makes the two-line wrap
+           measured at 852x393 (43 chars needed ~317px in a 300px column)
+           structurally impossible instead of merely unlikely. */
+        .vend-disclosure-slot-desk {
+          min-height: 18px;
+          line-height: 18px;
+          margin-top: -4px;
+          white-space: nowrap;
+          overflow: hidden;
+          /* 43 chars + plaque padding must clear the narrowest control column
+             (300px in compact landscape): 43 x 10 x 0.651 + 14 = 294px. */
+          font-size: 10px;
+          letter-spacing: 0.04em;
+        }
+        .vend-disclosure-slot-desk > span {
+          /* Dark plaque: 11px dim grey was being asked to carry over a
+             translucent seam with the lit cabinet behind it. */
+          display: inline-block;
+          max-width: 100%;
+          padding: 0 7px;
+          border-radius: 5px;
+          background: rgba(6, 8, 12, 0.92);
+          color: #b7c1d0;
+        }
         .vend-stepper-cluster { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
         .vend-stepper-cluster > .vend-stepper-label {
           font-family: "Geist Mono", ui-monospace, monospace;
@@ -2455,6 +2933,15 @@ export function VendingExperience(): React.ReactElement {
           /* VEND stays a big primary target but trimmed vertical padding keeps
              the four-item stack inside the fold (16->12px => ~46px tall). */
           .vend-cta { padding-top: 12px !important; padding-bottom: 12px !important; }
+          /* The reserved disclosure slot costs column height, and this fold is
+             the one that counts every pixel. Trim it to the portrait 14px and
+             cancel the flex gap so it reads as a caption hanging directly off
+             the CTA: 20px of added height becomes 14px. */
+          .vend-disclosure-slot-desk {
+            min-height: 14px;
+            line-height: 14px;
+            margin-top: -6px;
+          }
         }
         /* ── F8 · DESKTOP: LAST VENDS inside the fold ────────────────────────
            The tester had to scroll the page to see the history at all. The
@@ -2534,13 +3021,29 @@ export function VendingExperience(): React.ReactElement {
           100% { background-position: -60% 0; }
         }
         .rip-lip-tear { animation: ripLip ${RIP_TEAR_MS}ms cubic-bezier(0.3, 0.2, 0.4, 1) both; }
+        /* fb-d item 6. The lip used to hold opacity:1 until the very last
+           keyframe while travelling +178px right and -224px up. That travel is
+           a FIXED pixel distance but the rip layer SCALES: on a 360px phone the
+           layer is 275.7px wide and the pack leaves only ~46px of room beside
+           it, so the lip was still fully opaque when it crossed the layer's
+           overflow clip and got cut to a dead-straight vertical line in mid
+           air (measured: 7.2px past the right edge pre-fix, and still opaque
+           58px past it at the 74% keyframe).
+           The peel is unchanged in shape, direction and DURATION (RIP_TEAR_MS
+           is untouched, RG-C5); the flight is shortened and, more importantly,
+           the lip is nearly gone by the time it reaches any edge — so it exits
+           by fading, never by being razored. It is still a peel and a flight,
+           not a vanish: it holds full opacity through the whole tear-and-snap
+           and only gives up on the way out. */
         @keyframes ripLip {
           0%   { transform: translate(0, 0) rotate(0deg); opacity: 1; }
           20%  { transform: translate(-5px, -7px) rotate(-8deg); opacity: 1; }
           34%  { transform: translate(3px, -13px) rotate(5deg); opacity: 1; }
-          46%  { transform: translate(26px, -42px) rotate(16deg); opacity: 1; }
-          74%  { transform: translate(104px, -138px) rotate(38deg); opacity: 1; }
-          100% { transform: translate(178px, -224px) rotate(56deg); opacity: 0; }
+          46%  { transform: translate(20px, -33px) rotate(16deg); opacity: 1; }
+          62%  { transform: translate(48px, -66px) rotate(27deg); opacity: 0.82; }
+          78%  { transform: translate(78px, -104px) rotate(40deg); opacity: 0.34; }
+          90%  { transform: translate(102px, -136px) rotate(49deg); opacity: 0.06; }
+          100% { transform: translate(120px, -160px) rotate(56deg); opacity: 0; }
         }
         .rip-body-shake { animation: ripBodyShake ${RIP_TEAR_MS}ms ease-in-out both; }
         @keyframes ripBodyShake {
@@ -2734,7 +3237,7 @@ export function VendingExperience(): React.ReactElement {
             style={{
               ...btnBase,
               position: 'absolute',
-              left: -8,
+              left: arrowInset,
               top: '44%',
               zIndex: 2,
               borderRadius: 24,
@@ -2755,7 +3258,7 @@ export function VendingExperience(): React.ReactElement {
             style={{
               ...btnBase,
               position: 'absolute',
-              right: -8,
+              right: arrowInset,
               top: '44%',
               zIndex: 2,
               borderRadius: 24,
@@ -2788,8 +3291,18 @@ export function VendingExperience(): React.ReactElement {
               zIndex: 2,
               // Subtle backplate: the rail chips must read on the busy room
               // floor (autisk contrast nit).
-              background: 'rgba(6, 8, 12, 0.55)',
-              border: '1px solid rgba(13, 15, 21, 0.6)',
+              //
+              // fb-d item 5: the backplate was unconditional, so whenever the
+              // rail had NOTHING to host — ready phase with slot-pick not
+              // offered, which is every short phone (360x740) and compact
+              // landscape (852x393) — it rendered as a bare grey bar / floating
+              // dark block under the cabinet. The chrome now follows its
+              // CONTENT. The height reserve does NOT: the rail's height feeds
+              // --vend-chrome and therefore the cabinet size, so collapsing it
+              // would resize the machine the instant a vend starts. Invisible,
+              // same height, no reflow.
+              background: railHasContent ? 'rgba(6, 8, 12, 0.55)' : 'transparent',
+              border: `1px solid ${railHasContent ? 'rgba(13, 15, 21, 0.6)' : 'transparent'}`,
               borderRadius: 12,
               padding: '6px 10px',
             }}
@@ -2955,20 +3468,15 @@ export function VendingExperience(): React.ReactElement {
               ready; while vending it becomes the reveal-pace SKIP. */}
           {vendCta}
 
-          {overBalance && (
-            <div
-              style={{
-                fontFamily: T.mono,
-                fontSize: 11,
-                letterSpacing: '0.06em',
-                color: T.dim,
-                textAlign: 'center',
-                marginTop: -4,
-              }}
-            >
-              {disclosureCopy}
-            </div>
-          )}
+          {/* fb-d item 3: this used to MOUNT conditionally, so the whole
+              control column jumped by a line at exactly the moment the VEND
+              CTA went dead — the one moment the player is looking at it. It
+              now occupies a reserved slot in EVERY state, mirroring the
+              portrait .vend-disclosure-slot, and carries a dark plaque so 11px
+              grey is not asked to hold up over a translucent seam. */}
+          <div className="vend-disclosure-slot vend-disclosure-slot-desk">
+            {overBalance ? <span>{disclosureCopy}</span> : ''}
+          </div>
 
           <div style={{ display: 'flex', gap: 8 }}>{cutsceneToggle}</div>
 
