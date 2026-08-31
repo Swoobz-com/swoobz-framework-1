@@ -1,5 +1,49 @@
 # HANDOFF — AUTOMAT (originals/vending) · for the next Fable 5 session
 
+## 🟦 SESSION 2026-08-31 (later) — PLAYER-FEEDBACK ROUND F1-F10 (HEAD dc3f508, pushed)
+
+Source of record: `automat/New Games feedback.docx` at the export root (Tim's
+notes + a tester review + a Discord quote; the `automat/` folder is otherwise
+an EMPTY deploy shell — canonical source stays HERE). Spec: `SPEC-FEEDBACK-
+0831.md`. Built in three codotty rounds (A: F1-F3+F6-F10 · B: F4-F5 ·
+C: QA-finding fixes), QA fleet: mobile-touch **ATTESTED FOR SHIP** · rg-c5
+**PASS 6/6** · brand+slop **ATTESTED** (0 slop flags, 100% Geist census).
+
+What shipped: money-first display everywhere (F1) · balance/aria/history
+suspense mask until reveal (F2, provider untouched) · GOLD VEND / PAID OUT /
+NO RETURN eyebrow + NET hero (F3, RG-C2 symmetric) · rip anticipation/
+hit-stop/gold-freeze/dud-deflate (F4) · FIVE new zero-param class-keyed audio
+cues + gold cue moved to the gold card's LANDING (F5 — **vendingAudio
+re-pinned 8609c589→84e26afb, RG-C5 attested**; the pin + cue count live in
+AGENTVENDING.md) · plaque LED code panel + desktop A-D/1-5 keypad (F6, FIFO
+identical, keyboard support) · ≥12px labels + re-measured contrast (F7) ·
+LAST VENDS inside the desktop fold (F8) · tier backdrops normalized
+cover/center-bottom (F9) · AUTOMAT favicon (F10, in vending-run/index.html —
+committed in the ROOT repo, see open item 4).
+
+Open items / Tim calls:
+1. Desktop keypad sits below the 1280×800 fold (LED readout is in-fold;
+   holding the keypad in-fold costs 25% cabinet). Discoverability call.
+2. Baked-art deltas across tiers (floor line 83.2/78.4/80.7% of image
+   height; TIDE has lit cream side-walls) — art REGEN item, no credits spent.
+3. Backlog: 10px on-glass A1..D5 slot tags (pre-existing) · aria-live chip
+   concat "0.250.25x" (route to a11y) · `_qa-bv2-journey.mjs` asserts the
+   old "Clear slot selection" aria-label (now "Clear slot codes") — stale
+   gate, fix the probe · landscape docH 618>393 stays the accepted baseline.
+4. ROOT repo (export dir) branch `swoobah/mobile-p0-and-mote-discipline` is
+   201 commits ahead with a 3.45 GiB pack — `git push` HTTP 500s. The
+   favicon + gitignore commits sit safely on it locally; untangling the big
+   push belongs to a Swoobah session.
+
+New learnings: paint-order ≠ hit-order (a pointer-events:none decor div was
+"fixed" for clicks 2026-07-22 and STILL painted over the new code panel —
+z-index the surface, not just the pointer) · contrast probes must
+element-screenshot, not viewport-clip (two agents independently produced
+false readings from document-vs-viewport rect mismatch) · hit-extender via
+::before face keeps the button box 48px while the painted key stays 30px.
+
+---
+
 ## 🟩 SESSION 2026-08-31 — SINGLE-SCREEN PORTRAIT (HEAD 95d2198, pushed)
 
 Tim's ask: "op mobile moet je ver scrollen — Yurei heeft een all-fitting UI,
