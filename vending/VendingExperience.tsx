@@ -175,6 +175,14 @@ const TIER_UI: Readonly<
  *  plateau rotates 120° per step — the two background machines stay visible. */
 const TURNTABLE_RADIUS = 305
 
+/** Slot-pick TOUCH FLOOR. The pick overlay's hit-cells are percent-positioned
+ *  against the machine canvas (5 columns across the glass), so a cell's width
+ *  is a fixed fraction of the canvas CSS width. 337px is the measured width at
+ *  which the narrowest cell still clears the 44px touch minimum — below it the
+ *  feature is NOT OFFERED rather than offered too small (SPEC-PORTRAIT-0831
+ *  "never below 337px canvas width", learning 18). */
+const SLOT_PICK_MIN_CANVAS_PX = 337
+
 const EMPTY_PACKS: readonly PackResult[] = []
 /** DOM chip pop is delayed to the canvas bay-landing beat
  *  (coil + chamber fall + hidden beat + bay drop). */
@@ -1146,9 +1154,65 @@ export function VendingExperience(): React.ReactElement {
     mq.addEventListener('change', apply)
     return () => mq.removeEventListener('change', apply)
   }, [])
+  // SINGLE-SCREEN PORTRAIT (SPEC-PORTRAIT-0831): phones held upright get the
+  // four-band layout — top strip / stage / floating controls / money strip —
+  // inside one 100dvh screen with NO page scroll. Same query as the CSS block
+  // below, so DOM and layout can never disagree. Read EAGERLY (lazy initial
+  // state, not a post-mount effect) so the very first paint is already the
+  // portrait tree — a first-paint measurement must never catch the desktop
+  // arrangement. Slot-picking is offered here whenever the stage still renders
+  // the canvas >=337px wide (so every hit-cell clears 44px) — which is a
+  // MEASURED condition, not a property of the orientation: see the
+  // ResizeObserver below.
+  const [isPortrait, setIsPortrait] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      window.matchMedia('(max-width: 940px) and (orientation: portrait)').matches,
+  )
   useEffect(() => {
-    if (compactLandscape) setSelectedSlots([])
-  }, [compactLandscape])
+    const mq = window.matchMedia('(max-width: 940px) and (orientation: portrait)')
+    const apply = (): void => setIsPortrait(mq.matches)
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+  }, [])
+  // ── Live geometry (ResizeObserver, not a mount-time snapshot) ─────────────
+  // Two measured numbers drive two rules that a media query CANNOT express,
+  // because both depend on the RENDERED height budget (dvh minus browser
+  // chrome), not on the declared viewport width:
+  //   stageCanvasW — the real CSS width of the machine canvas. On a SHORT
+  //     portrait phone (360x740, 412x738: the address bar eats ~80-180px) the
+  //     flex cap shrinks the cabinet to ~274px, and the percent-positioned
+  //     hit-cells shrink with it to ~35.7px — under the 44px touch floor. So
+  //     the compact-landscape rule mirrors here: below the floor slot-pick is
+  //     NOT OFFERED at all (overlay off, hint+CLEAR hidden, picks cleared).
+  //   moneyStripH — the real height of the fixed bottom money strip, which is
+  //     what the root must reserve as padding. A hard-coded reserve
+  //     under-counted it on small phones and the strip painted over the
+  //     stepper row (blind mobile QA, 2026-08-31).
+  const turntableRef = useRef<HTMLDivElement | null>(null)
+  const moneyStripRef = useRef<HTMLDivElement | null>(null)
+  const [stageCanvasW, setStageCanvasW] = useState(0)
+  const [moneyStripH, setMoneyStripH] = useState(0)
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        // border-box via the live rect: contentRect would drop the strip's
+        // own padding (including the safe-area inset) from the reserve.
+        const h = e.target.getBoundingClientRect()
+        if (e.target === turntableRef.current) setStageCanvasW(Math.round(h.width))
+        else setMoneyStripH(Math.round(h.height))
+      }
+    })
+    if (turntableRef.current) ro.observe(turntableRef.current)
+    if (moneyStripRef.current) ro.observe(moneyStripRef.current)
+    return () => ro.disconnect()
+  }, [isPortrait])
+  const slotPickOffered = !compactLandscape && stageCanvasW >= SLOT_PICK_MIN_CANVAS_PX
+  useEffect(() => {
+    if (!slotPickOffered) setSelectedSlots([])
+  }, [slotPickOffered])
   // Selection clears the moment the vend STARTS (Tim 2026-07-22: no lingering
   // highlights while/after the machine runs — the coil already shows where the
   // packs come from; a new round always begins clean, so hand-picking never
@@ -1163,16 +1227,9 @@ export function VendingExperience(): React.ReactElement {
     // One overlay at a time: the vend/settled ceremony owns the screen, so the
     // help modal must never stack over the settled/COLLECT overlay (flow-QA).
     if (phaseKind === 'vending' || phaseKind === 'settled') setShowHelp(false)
-    // Mobile (single-column PORTRAIT stack): the action plays in the machine
-    // stage ABOVE the controls — bring it into view so the player sees the
-    // vend, the rip and the receipt without hunting (jesse blocker #1). In
-    // landscape the two-column grid keeps the stage in view, so no scroll.
-    if (
-      (phaseKind === 'vending' || phaseKind === 'settled') &&
-      window.matchMedia('(max-width: 940px) and (orientation: portrait)').matches
-    ) {
-      stageRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
-    }
+    // (The old portrait scrollIntoView hack is GONE: portrait is now a single
+    // non-scrolling screen — SPEC-PORTRAIT-0831 — so the stage is always in
+    // view and a scroll call would only fight the layout.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phaseKind])
 
@@ -1227,6 +1284,194 @@ export function VendingExperience(): React.ReactElement {
   const committedCount =
     state.phase.kind === 'settled' ? state.phase.outcome.packCount : state.packCount
 
+  // ── Shared control atoms ──────────────────────────────────────────────────
+  // Every interactive control is DECLARED ONCE here and only ARRANGED
+  // differently by the two layouts (desktop/landscape card column vs the
+  // portrait single-screen bands). Same handlers, same aria labels, same
+  // aria-pressed state, same keyboard behaviour in both — the trees cannot
+  // drift apart, and nothing is "reachable on desktop only".
+  const helpButton = (
+    <button
+      type="button"
+      onClick={() => setShowHelp((v) => !v)}
+      disabled={phaseKind === 'settled'}
+      aria-label="How it works"
+      aria-expanded={showHelp}
+      style={{
+        ...btnBase,
+        borderRadius: 22,
+        fontSize: 16,
+        color: T.dim,
+        opacity: phaseKind === 'settled' ? 0.35 : 1,
+      }}
+    >
+      ?
+    </button>
+  )
+  const machineChips = MACHINE_ORDER.map((t) => (
+    <SmallBtn
+      key={t}
+      onClick={() => switchTier(t)}
+      active={machine === t}
+      disabled={phaseKind === 'vending'}
+      grow
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'inline-block',
+          width: 7,
+          height: 7,
+          borderRadius: 4,
+          background: TIER_ROOMS[t].led,
+          boxShadow: `0 0 6px ${TIER_ROOMS[t].led}`,
+          marginRight: 6,
+          verticalAlign: 'middle',
+        }}
+      />
+      {t.toUpperCase()}
+    </SmallBtn>
+  ))
+  const cutsceneToggle = (
+    <SmallBtn
+      onClick={() => setCutsceneOn((v) => !v)}
+      active={cutsceneOn}
+      ariaLabel="Toggle pack-rip cutscene"
+      grow
+    >
+      CUTSCENE · {cutsceneOn ? 'ON' : 'OFF'}
+    </SmallBtn>
+  )
+  const vendCta = (
+    <button
+      type="button"
+      className="vend-cta"
+      onClick={() => {
+        if (phaseKind === 'vending') c.skipReveal()
+        else {
+          // Freeze the presentation slot map for this round BEFORE the
+          // commit (rolls unaffected — this only routes the drops).
+          setCommittedSlotOrder(computeSlotOrder(selectedSlots, state.packCount))
+          void c.vendPacks()
+        }
+      }}
+      disabled={phaseKind !== 'vending' && !c.canVend}
+      style={(() => {
+        const live = phaseKind === 'vending' || c.canVend
+        const accent = T.cyan
+        const wash = 'linear-gradient(180deg, rgba(0,240,255,0.18), rgba(0,240,255,0.07))'
+        const halo = '0 0 18px rgba(0,240,255,0.22), inset 0 1px 0 rgba(255,255,255,0.14)'
+        return {
+          ...btnBase,
+          fontSize: 16,
+          fontWeight: 800,
+          letterSpacing: '0.1em',
+          padding: '16px 0',
+          borderColor: live ? accent : T.ink,
+          background: live ? wash : T.keyFace,
+          boxShadow: live ? halo : btnBase.boxShadow,
+          color: live ? accent : T.faint,
+        } as React.CSSProperties
+      })()}
+    >
+      {phaseKind === 'vending'
+        ? 'SKIP · SHOW ALL PACKS'
+        : `VEND ${state.packCount} PACK${state.packCount > 1 ? 'S' : ''} · ${formatUsdc(c.totalCostLamports)}`}
+    </button>
+  )
+  // Balance disclosure: shown ONLY when an exceeds-balance total is the reason
+  // the VEND CTA is disabled. Calm, factual, RG-neutral — no urgency, no color
+  // escalation, no "add funds" nudge. In portrait it renders inside a
+  // FIXED-HEIGHT slot so appearing text can never reflow the screen.
+  const overBalance =
+    phaseKind === 'ready' &&
+    c.totalCostLamports > 0n &&
+    c.totalCostLamports > state.balanceLamports
+  const disclosureCopy = 'TOTAL EXCEEDS BALANCE · LOWER PACKS OR PRICE'
+  const priceStepper = (
+    <div className="vend-stepper-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <SmallBtn
+        onClick={() => {
+          const cur = state.wagerPerPackLamports
+          const lower = [...PRICE_LADDER].reverse().find((p) => p < cur)
+          if (lower) c.setWager(lower)
+        }}
+        disabled={phaseKind === 'vending'}
+        ariaLabel="Lower pack price"
+      >
+        −
+      </SmallBtn>
+      <select
+        aria-label="Pack price"
+        value={state.wagerPerPackLamports.toString()}
+        onChange={(e) => c.setWager(BigInt(e.target.value))}
+        disabled={phaseKind === 'vending'}
+        style={selectStyle}
+      >
+        {!PRICE_LADDER.includes(state.wagerPerPackLamports) && (
+          <option value={state.wagerPerPackLamports.toString()} style={selectOptionStyle}>
+            {formatUsdc(state.wagerPerPackLamports)}
+          </option>
+        )}
+        {PRICE_LADDER.map((p) => (
+          <option key={p.toString()} value={p.toString()} style={selectOptionStyle}>
+            {formatUsdc(p)}
+          </option>
+        ))}
+      </select>
+      <SmallBtn
+        onClick={() => {
+          const cur = state.wagerPerPackLamports
+          const higher = PRICE_LADDER.find((p) => p > cur)
+          if (higher) c.setWager(higher)
+        }}
+        disabled={phaseKind === 'vending'}
+        ariaLabel="Raise pack price"
+      >
+        +
+      </SmallBtn>
+    </div>
+  )
+  const packsStepper = (
+    <div className="vend-stepper-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+      <SmallBtn
+        onClick={() => c.setPackCount(state.packCount - 1)}
+        disabled={phaseKind === 'vending' || state.packCount <= MIN_PACKS}
+        ariaLabel="Fewer packs"
+      >
+        −
+      </SmallBtn>
+      <select
+        aria-label="Packs this vend"
+        value={state.packCount}
+        onChange={(e) => c.setPackCount(Number(e.target.value))}
+        disabled={phaseKind === 'vending'}
+        style={selectStyle}
+      >
+        {Array.from({ length: MAX_PACKS }, (_, i) => i + 1).map((n) => (
+          // Portrait renders the count alone: the control is ~86px wide there
+          // and both the unit and the ceiling already sit in its label
+          // ("PACKS · MAX 20"), so the long form would be clipped mid-word.
+          // Same values, same order, same handler.
+          <option key={n} value={n} style={selectOptionStyle}>
+            {isPortrait
+              ? `${n}`
+              : n === MAX_PACKS
+                ? `${n} PACKS · MAX`
+                : `${n} PACK${n > 1 ? 'S' : ''}`}
+          </option>
+        ))}
+      </select>
+      <SmallBtn
+        onClick={() => c.setPackCount(state.packCount + 1)}
+        disabled={phaseKind === 'vending' || state.packCount >= MAX_PACKS}
+        ariaLabel="More packs"
+      >
+        +
+      </SmallBtn>
+    </div>
+  )
+
   return (
     <div
       className="vend-root"
@@ -1239,6 +1484,12 @@ export function VendingExperience(): React.ReactElement {
         ['--tier-key-bottom' as string]: TIER_UI[tier].keyBottom,
         ['--tier-frame' as string]: TIER_UI[tier].frame,
         ['--tier-label' as string]: TIER_UI[tier].label,
+        // MEASURED height of the fixed money strip (portrait band 4). The root
+        // reserves exactly this much as padding-bottom and the stage budget
+        // subtracts exactly this much, so the strip can never paint over the
+        // stepper row — whatever the strip's real line count and safe-area
+        // inset turn out to be. Falls back to the CSS default until measured.
+        ...(moneyStripH > 0 ? { ['--vend-strip' as string]: `${moneyStripH}px` } : null),
         minHeight: '100dvh',
         position: 'relative',
         overflow: 'hidden',
@@ -1306,11 +1557,245 @@ export function VendingExperience(): React.ReactElement {
           .vend-chip { animation: none; opacity: 1; }
         }
         .vend-shell { display: grid; grid-template-columns: minmax(0, 560px) 320px; gap: 24px; align-items: start; position: relative; }
-        /* PORTRAIT phones: single-column stack (stage above the control column).
-           Width-only would also catch landscape phones and hand them the stack —
-           where the first paint is machine-glass only (mobile-QA CRITICAL). */
+        /* ── PORTRAIT phones: ONE SCREEN, no page scroll (SPEC-PORTRAIT-0831).
+           Four bands top→bottom: slim top strip (identity · BALANCE · display
+           toggle · help) / the STAGE as the hero / a floating control zone with
+           no card chrome / a slim money strip pinned to the bottom edge.
+           The old stack scrolled 1.54-1.67 screens (docH 1407 vs 915/844).
+
+           Method: COMPACT THE REAL LAYOUT, never transform:scale it (learning
+           13) — every control keeps its true >=44px runtime box. The stage
+           absorbs whatever height is left over and the machine derives its
+           WIDTH from that height through its 520/760 aspect ratio, so the
+           machine can never push a control off the screen. The same expression
+           caps .vend-stage so the turntable arrows keep hugging the cabinet.
+           --vend-chrome is the measured height of the three non-stage bands
+           plus the rail and paddings — half of it a constant, half the money
+           strip's live measured height (verified at 412x915, 390x844 and the
+           STRESSED short viewports 360x740 / 412x738, where browser chrome
+           eats the dvh); the flex cap is the real guard, this only keeps the
+           arrows tight.
+
+           Width-only media would also catch landscape phones and hand them the
+           stack — where the first paint is machine-glass only (mobile-QA
+           CRITICAL) — hence the orientation clause. */
         @media (max-width: 940px) and (orientation: portrait) {
-          .vend-shell { grid-template-columns: minmax(0, 1fr); max-width: 560px; }
+          .vend-root {
+            /* The non-stage bands: 300px of top strip + rail + control zone +
+               paddings + gaps, PLUS the money strip's own MEASURED height
+               (--vend-strip, set from a ResizeObserver on the strip; the 40px
+               fallback covers the frame before the first measurement). The
+               strip used to be counted as a hard-coded 36px reserve, which
+               under-counted it on a 360px-wide phone — its compliance line
+               wrapped to two lines there and the band painted over the stepper
+               row (blind mobile QA, 2026-08-31). Counting the real number in
+               BOTH places (reserve and budget) means the stage — the only
+               elastic band — shrinks instead. */
+            --vend-chrome: calc(300px + var(--vend-strip, 40px));
+            /* border-box or the paddings ADD to 100dvh and the page scrolls by
+               exactly padding-top + padding-bottom. */
+            box-sizing: border-box;
+            height: 100dvh !important;
+            min-height: 100dvh !important;
+            overflow: hidden !important;
+            /* +6px: a visible breath between the last control and the strip's
+               first line, so they never read as one block. */
+            padding: 6px 6px calc(var(--vend-strip, 40px) + 6px) !important;
+          }
+          .vend-shell {
+            display: flex !important;
+            flex-direction: column !important;
+            width: 100% !important;
+            max-width: none !important;
+            height: 100% !important;
+            min-height: 0;
+            gap: 6px;
+            /* The desktop grid sets align-items:start; in this column flex that
+               would shrink every band to its own content width. */
+            align-items: stretch !important;
+          }
+          /* Band 1 — top strip. */
+          .vend-topstrip { flex: 0 0 auto; }
+          /* Band 2 — the stage (hero). */
+          .vend-stage {
+            flex: 0 1 auto;
+            min-height: 0;
+            min-width: 0;
+            width: 100%;
+            /* The cabinet is as big as the leftover height allows, and never
+               wider than the column. Capping the STAGE (not just the machine)
+               keeps the absolutely-placed turntable arrows hugging the
+               cabinet edges instead of drifting to the screen edges. */
+            max-width: min(100%, calc((100dvh - var(--vend-chrome)) * 0.6842));
+            align-self: center;
+            display: flex;
+            flex-direction: column;
+          }
+          .vend-stage .vend-turntable {
+            flex: 0 0 auto;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 auto !important;
+          }
+          .vend-rail {
+            flex: 0 0 auto;
+            min-height: 40px !important;
+            margin-top: 5px !important;
+            padding: 4px 8px !important;
+            gap: 6px !important;
+          }
+          /* Band 3 — floating control zone: no cards, no plank. margin-top
+             auto anchors it just above the money strip, so any slack left by
+             a conservative --vend-chrome opens as breathing room under the
+             cabinet instead of pushing a control off the screen. */
+          .vend-controls-portrait { flex: 0 0 auto; gap: 5px !important; margin-top: auto; min-width: 0; }
+          .vend-portrait-row { display: flex; gap: 6px; align-items: stretch; min-width: 0; }
+          /* min-width:0 all the way down: a native select's min-content width
+             is its LONGEST option ("20 PACKS · MAX"), which otherwise pushes
+             the whole column past the viewport width. */
+          .vend-portrait-row .vend-stepper-row { min-width: 0; }
+          .vend-portrait-row .vend-stepper-row > select {
+            min-width: 0 !important;
+            width: 0 !important; /* intrinsic contribution 0; flex-grow fills it */
+            font-size: 13px !important;
+            /* Asymmetric padding keeps the native chevron off the value at
+               these widths (it clipped "1.00" to "1.0(" at 4px). */
+            padding: 0 20px 0 6px !important;
+          }
+          /* Both clusters share the leftover evenly: with the portrait option
+             labels compacted, "10.00" is the widest value either shows. */
+          .vend-portrait-row > .vend-stepper-cluster { flex: 1 1 0; }
+          .vend-cta { padding-top: 15px !important; padding-bottom: 15px !important; }
+        }
+        /* Portrait-only band components. These classes are rendered ONLY inside
+           the portrait tree, so they need no media guard and no !important. */
+        .vend-topstrip {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 44px;
+          padding: 0 2px;
+          position: relative;
+          z-index: 3;
+        }
+        .vend-topstrip-mark {
+          font-weight: 800;
+          font-size: 15px;
+          letter-spacing: 0.14em;
+          color: #e8ecf1;
+          flex: 0 1 auto;
+          min-width: 0;
+        }
+        .vend-topstrip-bal {
+          margin-left: auto;
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 12px;
+          white-space: nowrap;
+        }
+        .vend-topstrip-cut { display: flex; flex: 0 0 auto; }
+        .vend-topstrip-cut > button { font-size: 11px !important; padding: 0 9px !important; }
+        .vend-topstrip-ballabel { letter-spacing: 0.1em; color: #b7c1d0; font-size: 10px; }
+        .vend-topstrip-balval { color: #e8ecf1; font-weight: 700; font-size: 13px; }
+        /* SMALL PHONES (<=380px): the four-item strip measured 381.8px of
+           content at 360px wide, which pushed the help "?" right off the
+           viewport — its centre returned null from elementFromPoint, i.e. an
+           untappable control (blind mobile QA, 2026-08-31). Nothing is dropped
+           and nothing shrinks below the touch floor: the two TYPE items give
+           back their tracking and the CUTSCENE chip compresses its label, so
+           every target keeps its >=44px box and lands inside the viewport.
+           390px and 412px are above this breakpoint and render unchanged.
+           Placed AFTER the base rules: a media query adds no specificity, so
+           an !important base declaration later in the sheet would win. */
+        @media (max-width: 380px) and (orientation: portrait) {
+          .vend-topstrip { gap: 4px; }
+          .vend-topstrip-mark { font-size: 12.5px; letter-spacing: 0.06em; }
+          .vend-topstrip-bal { gap: 4px; }
+          .vend-topstrip-ballabel { font-size: 9px; letter-spacing: 0.04em; }
+          .vend-topstrip-balval { font-size: 12px; }
+          .vend-topstrip-cut > button {
+            font-size: 10px !important;
+            padding: 0 6px !important;
+            letter-spacing: 0 !important;
+          }
+          /* PRICE/PACKS value truncation at 360w. The select box is 71px here
+             (348 row − four 44px steppers − 30px of gaps, halved) and Chrome
+             clips a native select's value against a UA inner box NARROWER than
+             our computed content box — so measureText(value) < content does
+             NOT prove it renders: "10.00" measures 39px inside a 50px content
+             box and still lost its last glyph. Both declarations are needed,
+             verified by screenshot against the ladder's WIDEST value (10.00),
+             not the default: padding alone gave "10.0(", 12px type alone gave
+             "10.0(", the pair gives "10.00". The BOX is untouched at 71px, so
+             no target moves and no row reflows. Above this breakpoint the box
+             is 86-97px and the base 13px / 0 20px 0 6px already fits. */
+          .vend-portrait-row .vend-stepper-row > select {
+            padding: 0 10px 0 2px !important;
+            font-size: 12px !important;
+          }
+        }
+        .vend-disclosure-slot {
+          min-height: 14px;
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 11px;
+          letter-spacing: 0.06em;
+          color: #9aa3b2;
+          text-align: center;
+          line-height: 14px;
+        }
+        .vend-stepper-cluster { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .vend-stepper-cluster > .vend-stepper-label {
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 9.5px;
+          font-weight: 600;
+          letter-spacing: 0.12em;
+          color: var(--tier-label, rgba(240, 181, 66, 0.78));
+          padding-left: 2px;
+        }
+        .vend-stepper-cluster > .vend-stepper-row { gap: 6px !important; }
+        /* Band 4 — money strip: text only, no wells, no borders, sitting ON the
+           scene (transparent top edge). Non-interactive, so pointer-events are
+           off (learning 19: nothing decorative may ever eat a press). */
+        .vend-moneystrip {
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 4;
+          pointer-events: none;
+          padding: 3px 10px calc(3px + env(safe-area-inset-bottom, 0px));
+          text-align: center;
+          background: linear-gradient(180deg, rgba(4, 6, 9, 0) 0%, rgba(4, 6, 9, 0.72) 48%, rgba(4, 6, 9, 0.92) 100%);
+        }
+        .vend-money-line {
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: 12px;
+          letter-spacing: 0.06em;
+          color: #b7c1d0;
+          line-height: 16px;
+        }
+        .vend-money-line b { color: #e8ecf1; font-weight: 700; }
+        .vend-money-line b.vend-money-max { color: #f0b542; }
+        /* ONE line, always. The compliance line is 50 monospace characters; at
+           11px it needs ~352px and wrapped to two lines on a 360px phone,
+           which is what made the strip overflow its reserve. It now scales
+           DOWN with the viewport instead of wrapping (11px is still the size
+           at 390px and up, so the reference viewports are unchanged), and
+           nowrap makes the regression structurally impossible. The ramp gives
+           back 1px of type per 20px of missing width — 9.5px at 360, which is
+           the size the desktop plaque already uses for this same line — so the
+           fit has ~30px of slack instead of landing exactly on the box edge.
+           Floored at 9px: even a 320px phone keeps it readable (measured 9px,
+           294px of text in a 300px box) rather than shrinking without limit. */
+        .vend-money-legal {
+          font-family: "Geist Mono", ui-monospace, monospace;
+          font-size: clamp(9px, calc(11px - (390px - 100vw) / 20), 11px);
+          letter-spacing: 0.04em;
+          color: #828c9c;
+          line-height: 15px;
+          white-space: nowrap;
         }
         /* LANDSCAPE phones (short viewport): keep the TWO-column grid so the
            stage (with the settled/COLLECT overlay) sits left and the control
@@ -1414,6 +1899,25 @@ export function VendingExperience(): React.ReactElement {
       `}</style>
 
       <div className="vend-shell">
+        {/* ── BAND 1 (portrait only): the top strip. Replaces the identity
+            plaque card — wordmark, live BALANCE, the display toggle and the
+            help affordance in one 44px row, so the stage can own the screen. */}
+        {isPortrait && (
+          <div className="vend-topstrip">
+            <span className="vend-topstrip-mark">AUTOMAT</span>
+            <span className="vend-topstrip-bal">
+              <span className="vend-topstrip-ballabel">BALANCE</span>
+              {/* Value only: the strip has no room for a unit at 390px, and
+                  the currency is already stated on the PACK PRICE · USDC
+                  control and throughout the receipt. */}
+              <span className="vend-topstrip-balval">{formatUsdc(state.balanceLamports)}</span>
+            </span>
+            {/* The chip is shared with the desktop column where it stretches;
+                this fit-content wrapper keeps it chip-sized in the strip. */}
+            <span className="vend-topstrip-cut">{cutsceneToggle}</span>
+            {helpButton}
+          </div>
+        )}
         {/* ── Machine column: the TURNTABLE — all three machines mounted on a
             rotating plateau; the back two stay visible, dimmed. ── */}
         <div style={{ position: 'relative', zIndex: 1 }} className="vend-stage" ref={stageRef}>
@@ -1438,6 +1942,7 @@ export function VendingExperience(): React.ReactElement {
           />
           <div
             className="vend-turntable"
+            ref={turntableRef}
             style={{ width: '100%', maxWidth: 520, margin: '0 auto', aspectRatio: '520 / 760' }}
           >
             {MACHINE_ORDER.map((t, i) => {
@@ -1467,9 +1972,9 @@ export function VendingExperience(): React.ReactElement {
                           (phaseKind === 'ready' ? computeSlotOrder(selectedSlots, packCount) : undefined)
                         : undefined
                     }
-                    selectedSlots={isActive && !compactLandscape ? selectedSlots : undefined}
-                    onToggleSlot={isActive && !compactLandscape ? toggleSlot : undefined}
-                    slotSelectEnabled={isActive && !compactLandscape && phaseKind === 'ready'}
+                    selectedSlots={isActive && slotPickOffered ? selectedSlots : undefined}
+                    onToggleSlot={isActive && slotPickOffered ? toggleSlot : undefined}
+                    slotSelectEnabled={isActive && slotPickOffered && phaseKind === 'ready'}
                     // Swoobz accent (Tim): selection glow is the brand cyan on
                     // every machine, not the per-tier LED color.
                     ledColor={T.cyan}
@@ -1523,6 +2028,7 @@ export function VendingExperience(): React.ReactElement {
           </button>
           {/* Pack rail: one chip per vended pack, synced to the tray landing. */}
           <div
+            className="vend-rail"
             aria-live="polite"
             style={{
               minHeight: 56,
@@ -1552,7 +2058,7 @@ export function VendingExperience(): React.ReactElement {
             {/* Slot-pick hint (ready only): calm, optional, no urgency. Lives in
                 the otherwise-empty rail so it never disturbs the tuned mobile
                 folds. */}
-            {phaseKind === 'ready' && !compactLandscape && (
+            {phaseKind === 'ready' && slotPickOffered && (
               <div
                 style={{
                   display: 'flex',
@@ -1621,8 +2127,34 @@ export function VendingExperience(): React.ReactElement {
           )}
         </div>
 
-        {/* ── Control column (own stacking layer: the 3D turntable's side
-            machines must never paint over the controls). ── */}
+        {isPortrait ? (
+          /* ── BAND 3 (portrait): the control zone. No stacked cards, no plank
+              — the hero CTA, the machine chips and the two steppers float
+              directly on the room. The disclosure line lives in a FIXED-HEIGHT
+              slot so it can never reflow the screen when it appears. LAST
+              VENDS is not rendered here (history stays on desktop/landscape;
+              the receipt and its verify path are untouched). ── */
+          <div
+            className="vend-controls vend-controls-portrait"
+            style={{ display: 'flex', flexDirection: 'column', gap: 5, position: 'relative', zIndex: 3 }}
+          >
+            <div className="vend-disclosure-slot">{overBalance ? disclosureCopy : ''}</div>
+            {vendCta}
+            <div className="vend-portrait-row">{machineChips}</div>
+            <div className="vend-portrait-row">
+              <div className="vend-stepper-cluster">
+                <span className="vend-stepper-label">PACK PRICE · USDC</span>
+                {priceStepper}
+              </div>
+              <div className="vend-stepper-cluster">
+                <span className="vend-stepper-label">PACKS · MAX {MAX_PACKS}</span>
+                {packsStepper}
+              </div>
+            </div>
+          </div>
+        ) : (
+        /* ── Control column (own stacking layer: the 3D turntable's side
+            machines must never paint over the controls). ── */
         <div className="vend-controls" style={{ display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', zIndex: 3 }}>
           <Card className="vend-card-id">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -1637,22 +2169,7 @@ export function VendingExperience(): React.ReactElement {
                   The multiplier vending machine
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowHelp((v) => !v)}
-                disabled={phaseKind === 'settled'}
-                aria-label="How it works"
-                aria-expanded={showHelp}
-                style={{
-                  ...btnBase,
-                  borderRadius: 22,
-                  fontSize: 16,
-                  color: T.dim,
-                  opacity: phaseKind === 'settled' ? 0.35 : 1,
-                }}
-              >
-                ?
-              </button>
+              {helpButton}
             </div>
             {/* Balance + compliance folded into the identity plaque so the
                 column never runs past the viewport. */}
@@ -1690,32 +2207,7 @@ export function VendingExperience(): React.ReactElement {
 
           <Card>
             <Label>MACHINE · PICK YOURS</Label>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {MACHINE_ORDER.map((t) => (
-                <SmallBtn
-                  key={t}
-                  onClick={() => switchTier(t)}
-                  active={machine === t}
-                  disabled={phaseKind === 'vending'}
-                  grow
-                >
-                  <span
-                    aria-hidden
-                    style={{
-                      display: 'inline-block',
-                      width: 7,
-                      height: 7,
-                      borderRadius: 4,
-                      background: TIER_ROOMS[t].led,
-                      boxShadow: `0 0 6px ${TIER_ROOMS[t].led}`,
-                      marginRight: 6,
-                      verticalAlign: 'middle',
-                    }}
-                  />
-                  {t.toUpperCase()}
-                </SmallBtn>
-              ))}
-            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>{machineChips}</div>
             <div
               className="vend-machine-caption"
               style={{
@@ -1732,154 +2224,33 @@ export function VendingExperience(): React.ReactElement {
 
           {/* The one button, right under the machine choice (Tim): VEND when
               ready; while vending it becomes the reveal-pace SKIP. */}
-          <button
-            type="button"
-            className="vend-cta"
-            onClick={() => {
-              if (phaseKind === 'vending') c.skipReveal()
-              else {
-                // Freeze the presentation slot map for this round BEFORE the
-                // commit (rolls unaffected — this only routes the drops).
-                setCommittedSlotOrder(computeSlotOrder(selectedSlots, state.packCount))
-                void c.vendPacks()
-              }
-            }}
-            disabled={phaseKind !== 'vending' && !c.canVend}
-            style={(() => {
-              const live = phaseKind === 'vending' || c.canVend
-              const accent = T.cyan
-              const wash = 'linear-gradient(180deg, rgba(0,240,255,0.18), rgba(0,240,255,0.07))'
-              const halo = '0 0 18px rgba(0,240,255,0.22), inset 0 1px 0 rgba(255,255,255,0.14)'
-              return {
-                ...btnBase,
-                fontSize: 16,
-                fontWeight: 800,
-                letterSpacing: '0.1em',
-                padding: '16px 0',
-                borderColor: live ? accent : T.ink,
-                background: live ? wash : T.keyFace,
-                boxShadow: live ? halo : btnBase.boxShadow,
-                color: live ? accent : T.faint,
-              } as React.CSSProperties
-            })()}
-          >
-            {phaseKind === 'vending'
-              ? 'SKIP · SHOW ALL PACKS'
-              : `VEND ${state.packCount} PACK${state.packCount > 1 ? 'S' : ''} · ${formatUsdc(c.totalCostLamports)}`}
-          </button>
+          {vendCta}
 
-          {/* Balance disclosure: shown ONLY when an exceeds-balance total is the
-              reason the VEND CTA is disabled. Calm, factual, RG-neutral — no
-              urgency, no color escalation, no "add funds" nudge. */}
-          {phaseKind === 'ready' &&
-            c.totalCostLamports > 0n &&
-            c.totalCostLamports > state.balanceLamports && (
-              <div
-                style={{
-                  fontFamily: T.mono,
-                  fontSize: 11,
-                  letterSpacing: '0.06em',
-                  color: T.dim,
-                  textAlign: 'center',
-                  marginTop: -4,
-                }}
-              >
-                TOTAL EXCEEDS BALANCE · LOWER PACKS OR PRICE
-              </div>
-            )}
-
-          <div style={{ display: 'flex', gap: 8 }}>
-            <SmallBtn
-              onClick={() => setCutsceneOn((v) => !v)}
-              active={cutsceneOn}
-              ariaLabel="Toggle pack-rip cutscene"
-              grow
+          {overBalance && (
+            <div
+              style={{
+                fontFamily: T.mono,
+                fontSize: 11,
+                letterSpacing: '0.06em',
+                color: T.dim,
+                textAlign: 'center',
+                marginTop: -4,
+              }}
             >
-              CUTSCENE · {cutsceneOn ? 'ON' : 'OFF'}
-            </SmallBtn>
-          </div>
+              {disclosureCopy}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>{cutsceneToggle}</div>
 
           <Card>
             <Label>PACK PRICE · USDC</Label>
-            {(
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <SmallBtn
-                  onClick={() => {
-                    const cur = state.wagerPerPackLamports
-                    const lower = [...PRICE_LADDER].reverse().find((p) => p < cur)
-                    if (lower) c.setWager(lower)
-                  }}
-                  disabled={phaseKind === 'vending'}
-                  ariaLabel="Lower pack price"
-                >
-                  −
-                </SmallBtn>
-                <select
-                  aria-label="Pack price"
-                  value={state.wagerPerPackLamports.toString()}
-                  onChange={(e) => c.setWager(BigInt(e.target.value))}
-                  disabled={phaseKind === 'vending'}
-                  style={selectStyle}
-                >
-                  {!PRICE_LADDER.includes(state.wagerPerPackLamports) && (
-                    <option value={state.wagerPerPackLamports.toString()} style={selectOptionStyle}>
-                      {formatUsdc(state.wagerPerPackLamports)}
-                    </option>
-                  )}
-                  {PRICE_LADDER.map((p) => (
-                    <option key={p.toString()} value={p.toString()} style={selectOptionStyle}>
-                      {formatUsdc(p)}
-                    </option>
-                  ))}
-                </select>
-                <SmallBtn
-                  onClick={() => {
-                    const cur = state.wagerPerPackLamports
-                    const higher = PRICE_LADDER.find((p) => p > cur)
-                    if (higher) c.setWager(higher)
-                  }}
-                  disabled={phaseKind === 'vending'}
-                  ariaLabel="Raise pack price"
-                >
-                  +
-                </SmallBtn>
-              </div>
-            )}
+            {priceStepper}
           </Card>
 
           <Card>
             <Label>PACKS THIS VEND · MAX {MAX_PACKS} AT ONCE</Label>
-            {(
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <SmallBtn
-                  onClick={() => c.setPackCount(state.packCount - 1)}
-                  disabled={phaseKind === 'vending' || state.packCount <= MIN_PACKS}
-                  ariaLabel="Fewer packs"
-                >
-                  −
-                </SmallBtn>
-                <select
-                  aria-label="Packs this vend"
-                  value={state.packCount}
-                  onChange={(e) => c.setPackCount(Number(e.target.value))}
-                  disabled={phaseKind === 'vending'}
-                  style={selectStyle}
-                >
-                  {Array.from({ length: MAX_PACKS }, (_, i) => i + 1).map((n) => (
-                    <option key={n} value={n} style={selectOptionStyle}>
-                      {n === MAX_PACKS ? `${n} PACKS · MAX` : `${n} PACK${n > 1 ? 'S' : ''}`}
-                    </option>
-                  ))}
-                </select>
-                <SmallBtn
-                  onClick={() => c.setPackCount(state.packCount + 1)}
-                  disabled={phaseKind === 'vending' || state.packCount >= MAX_PACKS}
-                  ariaLabel="More packs"
-                >
-                  +
-                </SmallBtn>
-              </div>
-            )}
+            {packsStepper}
             <div
               style={{
                 display: 'flex',
@@ -1934,6 +2305,24 @@ export function VendingExperience(): React.ReactElement {
           )}
 
         </div>
+        )}
+        {/* ── BAND 4 (portrait): the money strip. A slim band pinned to the
+            bottom edge, transparent at its top so it sits ON the room instead
+            of becoming a plank: the round's two live numbers plus the
+            compliance line. Text only — no wells, no borders — and
+            pointer-events:none so it can never eat a press (learning 19).
+            BALANCE lives in the top strip; safe-area inset respected. ── */}
+        {isPortrait && (
+          <div className="vend-moneystrip" ref={moneyStripRef}>
+            <div className="vend-money-line">
+              TOTAL <b>{formatUsdc(c.totalCostLamports)}</b> · MAX WIN{' '}
+              <b className="vend-money-max">{formatUsdc(c.maxWinLamports)}</b>
+            </div>
+            <div className="vend-money-legal">
+              RTP 96.50% · PROVABLY FAIR · PLAY SAFE · SET LIMITS
+            </div>
+          </div>
+        )}
       </div>
       {/* HOW IT WORKS: a viewport overlay (readable anywhere, any scroll,
           any device) instead of an inline column card. */}
