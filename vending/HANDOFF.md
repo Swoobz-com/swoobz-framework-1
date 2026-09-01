@@ -1,5 +1,25 @@
 # HANDOFF — AUTOMAT (originals/vending) · for the next Fable 5 session
 
+**⚡ START HERE: the standing assignment is the ➡️ BETTING-DASHBOARD UI
+REFERENCE block below (Tim names a folder + pictures at session start; you
+analyse → spec → implement → make a SKILL of the method). Everything else in
+this file is context and law around that work.**
+
+**State at handoff (2026-09-01, HEAD 75e0fe6 pushed, all gates green):** one
+day shipped three rounds — single-screen portrait (95d2198), player-feedback
+F1-F10 (dc3f508: money-first, suspense-mask, rip-choreografie, 5 nieuwe
+audio-cues met her-gepinde hash, LED-codepaneel + desktop keypad, favicon),
+en de autisk overlap-sweep tot OVERLAP-VRIJ (c7aabab). Elke ronde:
+codotty-maker → blinde QA → orchestrator-commit; geldbestanden byte-identiek
+door alles heen (vendingMath c5fe160b / vendingProvider 79a41988 /
+vendingAudio 84e26afb, RG-C5-attested). Slop-gate is nu wet (AGENTVENDING +
+brand-QA Probe 11). Session-learnings staan per blok hieronder; de
+duurzaamste drie: (1) verifieer op GESTRESTE viewports (360×740, dvh-krap) —
+referentie-viewports logen twee keer; (2) paint-order ≠ hit-order — een
+pointer-events:none-fix laat een element nog steeds fout SCHILDEREN; (3) een
+probe die de binnenste span meet onder-rapporteert blok-occlusie — en wie een
+defecte probe kopieert, erft de blinde vlek.
+
 ## 🟦 SESSION 2026-08-31 (later) — PLAYER-FEEDBACK ROUND F1-F10 (HEAD dc3f508, pushed)
 
 Source of record: `automat/New Games feedback.docx` at the export root (Tim's
@@ -50,11 +70,44 @@ Backlog uit deze sweep: 6px card type op 852×393 (cutscene-kolom structureel
 smal — layout-item, laag) · torn-lip asset heeft een rechte snijrand (art) ·
 zij-machine tekstflarden op 412 (smaak, artotty).
 
+## ➡️ NEXT SESSION — BETTING-DASHBOARD UI REFERENCE (Tim, 2026-09-01)
+
+**THE STANDING ASSIGNMENT.** Tim's correction after the 5 concept-boards:
+those went too broad ("i was just talking about the ui not the vending
+machine ui — as in betting dashboard font etc"). The target is the BETTING
+DASHBOARD layer specifically: the bet/controls surface, its typography,
+number styling, panel treatment — NOT the machine/scene art direction.
+
+Tim will open the next session by naming **a folder + reference picture(s)**.
+The job, in order:
+1. **FIND AND VIEW the reference first** (his art-direction cadence: he drops
+   references and names them — never act before you've looked; videos get
+   frames via ffmpeg `fps=2,scale=520:-1`).
+2. **ANALYSE it into a spec**: extract the dashboard grammar (type faces/
+   weights/sizes/tracking, number treatment, panel materials, spacing rhythm,
+   button/stepper shapes, how money values read) — concrete tokens, not
+   adjectives. Related skills to load: `dashboard-ui-as-world` (UI belongs to
+   the world, not a bolted bar) + `mobile-portrait-ui` (the portrait gates
+   below are LAW) + the slop-gate (brand fonts are currently Geist/Geist Mono
+   per Tim's standard — if the reference implies a different face, that is a
+   TIM DECISION to surface, not to make silently).
+3. **IMPLEMENT on AUTOMAT** (codotty, presentation-only, the usual hash-proof
+   + portrait-gate + QA-fleet loop in this file).
+4. **MAKE A SKILL of the method** — Tim: "analyse and implement and make a
+   skill". Durable home per SAVE-GLOBAL law:
+   `C:\Users\Erstr\stormforge\.claude\skills\<name>\SKILL.md` (+ it junctions
+   into `~/.claude/skills/` automatically; commit in stormforge). The skill =
+   the reusable recipe: reference → dashboard-grammar extraction → token
+   spec → implementation checklist → QA gates, so EVERY game can get the
+   same dashboard treatment.
+
+Context for that session: the 5 Higgsfield boards in
+`vending-run/shots-ui-concepts/` (diegetic/minimal/alley/terminal/collector)
+remain useful as SCENE-direction material but answered the wrong question —
+do not re-pitch them as the dashboard answer. Balance was 486.63 cr after
+those boards (10 cr spent).
+
 Open items / Tim calls:
-0. **UI-richting**: 5 Higgsfield concept-boards staan klaar
-   (vending-run/shots-ui-concepts/: diegetic cabinet / scene-first minimal /
-   night alley / kiosk-receipt / collector case; advies = 1+4 combi, 3 voor de
-   backdrops). Wacht op Tims keuze.
 1. Desktop keypad sits below the 1280×800 fold (LED readout is in-fold;
    holding the keypad in-fold costs 25% cabinet). Discoverability call.
 2. Baked-art deltas across tiers (floor line 83.2/78.4/80.7% of image
